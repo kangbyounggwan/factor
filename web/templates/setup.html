@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Factor Client 초기 설정</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .setup-container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            padding: 40px;
+            max-width: 500px;
+            width: 100%;
+        }
+        
+        .logo {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .logo h1 {
+            color: #333;
+            font-size: 2.5em;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+        
+        .logo p {
+            color: #666;
+            font-size: 1.1em;
+        }
+        
+        .step-indicator {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 30px;
+        }
+        
+        .step {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            background: #e0e0e0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 10px;
+            font-weight: bold;
+            transition: all 0.3s ease;
+        }
+        
+        .step.active {
+            background: #667eea;
+            color: white;
+        }
+        
+        .step.completed {
+            background: #4caf50;
+            color: white;
+        }
+        
+        .form-group {
+            margin-bottom: 25px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        input[type="text"], input[type="password"], select {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 16px;
+            transition: border-color 0.3s ease;
+        }
+        
+        input[type="text"]:focus, input[type="password"]:focus, select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .wifi-scan-btn {
+            background: #f0f0f0;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-top: 10px;
+            transition: background 0.3s ease;
+        }
+        
+        .wifi-scan-btn:hover {
+            background: #e0e0e0;
+        }
+        
+        .wifi-list {
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            margin-top: 10px;
+        }
+        
+        .wifi-item {
+            padding: 12px;
+            border-bottom: 1px solid #f0f0f0;
+            cursor: pointer;
+            transition: background 0.3s ease;
+        }
+        
+        .wifi-item:hover {
+            background: #f8f9fa;
+        }
+        
+        .wifi-item:last-child {
+            border-bottom: none;
+        }
+        
+        .wifi-item.selected {
+            background: #e3f2fd;
+            border-left: 4px solid #667eea;
+        }
+        
+        .btn {
+            width: 100%;
+            padding: 15px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.3s ease;
+            margin-top: 20px;
+        }
+        
+        .btn:hover {
+            background: #5a6fd8;
+        }
+        
+        .btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        
+        .btn-secondary {
+            background: #6c757d;
+            margin-top: 10px;
+        }
+        
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+        
+        .alert {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        
+        .alert.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .alert.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .alert.info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+        
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="setup-container">
+        <div class="logo">
+            <h1>Factor Client</h1>
+            <p>초기 설정을 시작합니다</p>
+        </div>
+        
+        <div class="step-indicator">
+            <div class="step active" id="step1">1</div>
+            <div class="step" id="step2">2</div>
+            <div class="step" id="step3">3</div>
+        </div>
+        
+        <div class="alert" id="alert"></div>
+        
+        <!-- 1단계: WiFi 설정 -->
+        <div id="wifi-setup" class="setup-step">
+            <h2>WiFi 네트워크 설정</h2>
+            <div class="form-group">
+                <button class="wifi-scan-btn" onclick="scanWifiNetworks()">
+                    📡 WiFi 네트워크 검색
+                </button>
+                <div class="wifi-list" id="wifi-list"></div>
+            </div>
+            
+            <div class="form-group">
+                <label for="wifi-ssid">네트워크 이름 (SSID)</label>
+                <input type="text" id="wifi-ssid" placeholder="WiFi 네트워크 이름을 입력하세요">
+            </div>
+            
+            <div class="form-group">
+                <label for="wifi-password">비밀번호</label>
+                <input type="password" id="wifi-password" placeholder="WiFi 비밀번호를 입력하세요">
+            </div>
+            
+            <button class="btn" onclick="nextStep(1)">다음 단계</button>
+        </div>
+        
+        <!-- 2단계: Factor Client 설정 -->
+        <div id="factor-setup" class="setup-step hidden">
+            <h2>Factor Client 설정</h2>
+            
+            <div class="form-group">
+                <label for="octoprint-host">OctoPrint 서버 주소</label>
+                <input type="text" id="octoprint-host" placeholder="예: 192.168.1.100" value="192.168.1.100">
+            </div>
+            
+            <div class="form-group">
+                <label for="octoprint-port">OctoPrint 포트</label>
+                <input type="text" id="octoprint-port" placeholder="예: 5000" value="5000">
+            </div>
+            
+            <div class="form-group">
+                <label for="octoprint-api-key">OctoPrint API 키</label>
+                <input type="text" id="octoprint-api-key" placeholder="OctoPrint API 키를 입력하세요">
+                <small style="color: #666; font-size: 0.9em;">
+                    OctoPrint 설정 > API에서 확인할 수 있습니다.
+                </small>
+            </div>
+            
+            <div class="form-group">
+                <label for="printer-port">프린터 포트</label>
+                <select id="printer-port">
+                    <option value="auto">자동 감지</option>
+                    <option value="/dev/ttyUSB0">/dev/ttyUSB0</option>
+                    <option value="/dev/ttyACM0">/dev/ttyACM0</option>
+                </select>
+            </div>
+            
+            <button class="btn" onclick="nextStep(2)">다음 단계</button>
+            <button class="btn btn-secondary" onclick="prevStep(2)">이전 단계</button>
+        </div>
+        
+        <!-- 3단계: 설정 완료 -->
+        <div id="complete-setup" class="setup-step hidden">
+            <h2>설정 완료</h2>
+            <p>모든 설정이 완료되었습니다. 설정을 적용하고 시스템을 재시작합니다.</p>
+            
+            <div class="loading" id="loading">
+                <div class="spinner"></div>
+                <p>설정을 적용하는 중...</p>
+            </div>
+            
+            <button class="btn" onclick="completeSetup()" id="complete-btn">설정 완료</button>
+            <button class="btn btn-secondary" onclick="prevStep(3)">이전 단계</button>
+        </div>
+    </div>
+    
+    <script>
+        let currentStep = 1;
+        let wifiNetworks = [];
+        let selectedWifi = null;
+        
+        function showAlert(message, type = 'info') {
+            const alert = document.getElementById('alert');
+            alert.textContent = message;
+            alert.className = `alert ${type}`;
+            alert.style.display = 'block';
+            
+            setTimeout(() => {
+                alert.style.display = 'none';
+            }, 5000);
+        }
+        
+        function updateStepIndicator() {
+            for (let i = 1; i <= 3; i++) {
+                const step = document.getElementById(`step${i}`);
+                step.classList.remove('active', 'completed');
+                
+                if (i < currentStep) {
+                    step.classList.add('completed');
+                } else if (i === currentStep) {
+                    step.classList.add('active');
+                }
+            }
+        }
+        
+        function showStep(stepNumber) {
+            document.querySelectorAll('.setup-step').forEach(step => {
+                step.classList.add('hidden');
+            });
+            
+            const stepId = ['', 'wifi-setup', 'factor-setup', 'complete-setup'][stepNumber];
+            document.getElementById(stepId).classList.remove('hidden');
+            
+            currentStep = stepNumber;
+            updateStepIndicator();
+        }
+        
+        function nextStep(step) {
+            if (step === 1) {
+                const ssid = document.getElementById('wifi-ssid').value;
+                const password = document.getElementById('wifi-password').value;
+                
+                if (!ssid) {
+                    showAlert('WiFi 네트워크 이름을 입력해주세요.', 'error');
+                    return;
+                }
+                
+                // WiFi 설정 저장
+                localStorage.setItem('wifi-ssid', ssid);
+                localStorage.setItem('wifi-password', password);
+                
+                showStep(2);
+            } else if (step === 2) {
+                const host = document.getElementById('octoprint-host').value;
+                const port = document.getElementById('octoprint-port').value;
+                const apiKey = document.getElementById('octoprint-api-key').value;
+                
+                if (!host || !port || !apiKey) {
+                    showAlert('모든 필드를 입력해주세요.', 'error');
+                    return;
+                }
+                
+                // Factor Client 설정 저장
+                localStorage.setItem('octoprint-host', host);
+                localStorage.setItem('octoprint-port', port);
+                localStorage.setItem('octoprint-api-key', apiKey);
+                localStorage.setItem('printer-port', document.getElementById('printer-port').value);
+                
+                showStep(3);
+            }
+        }
+        
+        function prevStep(step) {
+            showStep(step - 1);
+        }
+        
+        async function scanWifiNetworks() {
+            showAlert('WiFi 네트워크를 검색하는 중...', 'info');
+            
+            try {
+                const response = await fetch('/api/wifi/scan');
+                const data = await response.json();
+                
+                if (data.success) {
+                    wifiNetworks = data.networks;
+                    displayWifiNetworks();
+                    showAlert('WiFi 네트워크 검색이 완료되었습니다.', 'success');
+                } else {
+                    showAlert('WiFi 네트워크 검색에 실패했습니다.', 'error');
+                }
+            } catch (error) {
+                showAlert('네트워크 오류가 발생했습니다.', 'error');
+            }
+        }
+        
+        function displayWifiNetworks() {
+            const wifiList = document.getElementById('wifi-list');
+            wifiList.innerHTML = '';
+            
+            wifiNetworks.forEach(network => {
+                const item = document.createElement('div');
+                item.className = 'wifi-item';
+                item.innerHTML = `
+                    <strong>${network.ssid}</strong>
+                    <span style="float: right;">${network.signal}%</span>
+                `;
+                item.onclick = () => selectWifi(network);
+                wifiList.appendChild(item);
+            });
+        }
+        
+        function selectWifi(network) {
+            selectedWifi = network;
+            document.getElementById('wifi-ssid').value = network.ssid;
+            
+            // 선택된 WiFi 항목 표시
+            document.querySelectorAll('.wifi-item').forEach(item => {
+                item.classList.remove('selected');
+            });
+            event.target.classList.add('selected');
+        }
+        
+        async function completeSetup() {
+            const completeBtn = document.getElementById('complete-btn');
+            const loading = document.getElementById('loading');
+            
+            completeBtn.style.display = 'none';
+            loading.style.display = 'block';
+            
+            const config = {
+                wifi: {
+                    ssid: localStorage.getItem('wifi-ssid'),
+                    password: localStorage.getItem('wifi-password')
+                },
+                octoprint: {
+                    host: localStorage.getItem('octoprint-host'),
+                    port: parseInt(localStorage.getItem('octoprint-port')),
+                    api_key: localStorage.getItem('octoprint-api-key')
+                },
+                printer: {
+                    port: localStorage.getItem('printer-port')
+                }
+            };
+            
+            try {
+                const response = await fetch('/api/setup/complete', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(config)
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    showAlert('설정이 완료되었습니다. 시스템을 재시작합니다.', 'success');
+                    
+                    setTimeout(() => {
+                        window.location.href = '/';
+                    }, 3000);
+                } else {
+                    showAlert('설정 적용에 실패했습니다: ' + data.error, 'error');
+                    completeBtn.style.display = 'block';
+                    loading.style.display = 'none';
+                }
+            } catch (error) {
+                showAlert('설정 저장 중 오류가 발생했습니다.', 'error');
+                completeBtn.style.display = 'block';
+                loading.style.display = 'none';
+            }
+        }
+        
+        // 페이지 로드 시 초기화
+        document.addEventListener('DOMContentLoaded', function() {
+            updateStepIndicator();
+        });
+    </script>
+</body>
+</html> 

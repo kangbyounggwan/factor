@@ -1,0 +1,888 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Factor Client - 데이터 로그</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            font-weight: 700;
+        }
+        
+        .header .nav-links {
+            display: flex;
+            gap: 20px;
+        }
+        
+        .header .nav-links a {
+            color: white;
+            text-decoration: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            transition: background 0.3s ease;
+        }
+        
+        .header .nav-links a:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+        
+        .content {
+            padding: 30px;
+        }
+        
+        .control-panel {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 30px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
+        }
+        
+        .control-panel h3 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 1.5em;
+        }
+        
+        .control-row {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        
+        .control-group label {
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .control-group select, .control-group input {
+            padding: 8px 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+        
+        .control-group select:focus, .control-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .btn {
+            padding: 10px 20px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.3s ease;
+        }
+        
+        .btn:hover {
+            background: #5a6fd8;
+        }
+        
+        .btn-secondary {
+            background: #6c757d;
+        }
+        
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+        
+        .btn-success {
+            background: #28a745;
+        }
+        
+        .btn-success:hover {
+            background: #218838;
+        }
+        
+        .btn-danger {
+            background: #dc3545;
+        }
+        
+        .btn-danger:hover {
+            background: #c82333;
+        }
+        
+        .charts-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+        
+        .chart-container {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
+        }
+        
+        .chart-container h3 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 1.3em;
+            text-align: center;
+        }
+        
+        .chart-wrapper {
+            position: relative;
+            height: 300px;
+        }
+        
+        .full-width-chart {
+            grid-column: 1 / -1;
+        }
+        
+        .data-table {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
+        }
+        
+        .data-table h3 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 1.3em;
+        }
+        
+        .table-container {
+            overflow-x: auto;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        
+        th {
+            background: #667eea;
+            color: white;
+            font-weight: 600;
+        }
+        
+        tr:hover {
+            background: #f8f9fa;
+        }
+        
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #dc3545;
+        }
+        
+        .status-dot.active {
+            background: #28a745;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        
+        .alert {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        
+        .alert.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .alert.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .alert.info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        
+        @media (max-width: 1024px) {
+            .charts-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .header {
+                flex-direction: column;
+                gap: 20px;
+            }
+            
+            .header .nav-links {
+                flex-wrap: wrap;
+                justify-content: center;
+            }
+            
+            .control-row {
+                flex-direction: column;
+                align-items: stretch;
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 2em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>데이터 로그</h1>
+            <div class="nav-links">
+                <a href="/">홈</a>
+                <a href="/dashboard">대시보드</a>
+                <a href="/data">데이터 취득</a>
+                <a href="/settings">설정</a>
+            </div>
+        </div>
+        
+        <div class="content">
+            <div class="control-panel">
+                <h3>그래프 제어</h3>
+                <div class="alert" id="control-alert"></div>
+                
+                <div class="status-indicator">
+                    <div class="status-dot" id="update-status"></div>
+                    <span id="update-text">실시간 업데이트 상태 확인 중...</span>
+                </div>
+                
+                <div class="control-row">
+                    <div class="control-group">
+                        <label for="data-type">데이터 타입</label>
+                        <select id="data-type">
+                            <option value="temperature">온도</option>
+                            <option value="position">위치</option>
+                            <option value="progress">진행률</option>
+                            <option value="system">시스템</option>
+                        </select>
+                    </div>
+                    
+                    <div class="control-group">
+                        <label for="time-range">시간 범위</label>
+                        <select id="time-range">
+                            <option value="1h">1시간</option>
+                            <option value="6h">6시간</option>
+                            <option value="24h" selected>24시간</option>
+                            <option value="7d">7일</option>
+                            <option value="30d">30일</option>
+                        </select>
+                    </div>
+                    
+                    <div class="control-group">
+                        <label for="update-interval">업데이트 간격</label>
+                        <select id="update-interval">
+                            <option value="1">1초</option>
+                            <option value="5" selected>5초</option>
+                            <option value="10">10초</option>
+                            <option value="30">30초</option>
+                        </select>
+                    </div>
+                    
+                    <button class="btn btn-success" onclick="startRealTimeUpdate()">실시간 시작</button>
+                    <button class="btn btn-danger" onclick="stopRealTimeUpdate()">실시간 중지</button>
+                    <button class="btn btn-secondary" onclick="exportChart()">차트 내보내기</button>
+                </div>
+            </div>
+            
+            <div class="charts-grid">
+                <div class="chart-container">
+                    <h3>온도 그래프</h3>
+                    <div class="chart-wrapper">
+                        <canvas id="temperatureChart"></canvas>
+                    </div>
+                </div>
+                
+                <div class="chart-container">
+                    <h3>위치 그래프</h3>
+                    <div class="chart-wrapper">
+                        <canvas id="positionChart"></canvas>
+                    </div>
+                </div>
+                
+                <div class="chart-container">
+                    <h3>진행률 그래프</h3>
+                    <div class="chart-wrapper">
+                        <canvas id="progressChart"></canvas>
+                    </div>
+                </div>
+                
+                <div class="chart-container">
+                    <h3>시스템 리소스</h3>
+                    <div class="chart-wrapper">
+                        <canvas id="systemChart"></canvas>
+                    </div>
+                </div>
+                
+                <div class="chart-container full-width-chart">
+                    <h3>종합 데이터 뷰</h3>
+                    <div class="chart-wrapper">
+                        <canvas id="comprehensiveChart"></canvas>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="data-table">
+                <h3>최근 데이터 테이블</h3>
+                <div class="table-container">
+                    <table id="data-table">
+                        <thead>
+                            <tr>
+                                <th>시간</th>
+                                <th>데이터 타입</th>
+                                <th>값</th>
+                                <th>상태</th>
+                            </tr>
+                        </thead>
+                        <tbody id="data-table-body">
+                            <tr>
+                                <td colspan="4" style="text-align: center; color: #666;">데이터를 불러오는 중...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let charts = {};
+        let realTimeUpdateInterval;
+        let isRealTimeActive = false;
+        
+        // 페이지 로드 시 초기화
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeCharts();
+            loadInitialData();
+            updateStatus();
+        });
+        
+        // 차트 초기화
+        function initializeCharts() {
+            // 온도 차트
+            const tempCtx = document.getElementById('temperatureChart').getContext('2d');
+            charts.temperature = new Chart(tempCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: '노즐 온도',
+                        data: [],
+                        borderColor: '#ff6384',
+                        backgroundColor: 'rgba(255, 99, 132, 0.1)',
+                        tension: 0.4
+                    }, {
+                        label: '베드 온도',
+                        data: [],
+                        borderColor: '#36a2eb',
+                        backgroundColor: 'rgba(54, 162, 235, 0.1)',
+                        tension: 0.4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: '온도 (°C)'
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            position: 'top'
+                        }
+                    }
+                }
+            });
+            
+            // 위치 차트
+            const posCtx = document.getElementById('positionChart').getContext('2d');
+            charts.position = new Chart(posCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'X축',
+                        data: [],
+                        borderColor: '#ff6384',
+                        backgroundColor: 'rgba(255, 99, 132, 0.1)',
+                        tension: 0.4
+                    }, {
+                        label: 'Y축',
+                        data: [],
+                        borderColor: '#36a2eb',
+                        backgroundColor: 'rgba(54, 162, 235, 0.1)',
+                        tension: 0.4
+                    }, {
+                        label: 'Z축',
+                        data: [],
+                        borderColor: '#ffce56',
+                        backgroundColor: 'rgba(255, 206, 86, 0.1)',
+                        tension: 0.4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: '위치 (mm)'
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            position: 'top'
+                        }
+                    }
+                }
+            });
+            
+            // 진행률 차트
+            const progCtx = document.getElementById('progressChart').getContext('2d');
+            charts.progress = new Chart(progCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: '진행률',
+                        data: [],
+                        borderColor: '#4bc0c0',
+                        backgroundColor: 'rgba(75, 192, 192, 0.1)',
+                        tension: 0.4,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100,
+                            title: {
+                                display: true,
+                                text: '진행률 (%)'
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            position: 'top'
+                        }
+                    }
+                }
+            });
+            
+            // 시스템 차트
+            const sysCtx = document.getElementById('systemChart').getContext('2d');
+            charts.system = new Chart(sysCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'CPU 사용률',
+                        data: [],
+                        borderColor: '#ff6384',
+                        backgroundColor: 'rgba(255, 99, 132, 0.1)',
+                        tension: 0.4
+                    }, {
+                        label: '메모리 사용률',
+                        data: [],
+                        borderColor: '#36a2eb',
+                        backgroundColor: 'rgba(54, 162, 235, 0.1)',
+                        tension: 0.4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100,
+                            title: {
+                                display: true,
+                                text: '사용률 (%)'
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            position: 'top'
+                        }
+                    }
+                }
+            });
+            
+            // 종합 차트
+            const compCtx = document.getElementById('comprehensiveChart').getContext('2d');
+            charts.comprehensive = new Chart(compCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: '온도 (정규화)',
+                        data: [],
+                        borderColor: '#ff6384',
+                        backgroundColor: 'rgba(255, 99, 132, 0.1)',
+                        tension: 0.4,
+                        yAxisID: 'y'
+                    }, {
+                        label: '진행률',
+                        data: [],
+                        borderColor: '#4bc0c0',
+                        backgroundColor: 'rgba(75, 192, 192, 0.1)',
+                        tension: 0.4,
+                        yAxisID: 'y1'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            type: 'linear',
+                            display: true,
+                            position: 'left',
+                            title: {
+                                display: true,
+                                text: '온도 (°C)'
+                            }
+                        },
+                        y1: {
+                            type: 'linear',
+                            display: true,
+                            position: 'right',
+                            title: {
+                                display: true,
+                                text: '진행률 (%)'
+                            },
+                            grid: {
+                                drawOnChartArea: false
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            position: 'top'
+                        }
+                    }
+                }
+            });
+        }
+        
+        // 초기 데이터 로드
+        async function loadInitialData() {
+            try {
+                const response = await fetch('/api/data/preview');
+                const result = await response.json();
+                
+                if (response.ok && result.data) {
+                    updateChartsWithData(result.data);
+                    updateDataTable(result.data);
+                }
+            } catch (error) {
+                console.error('초기 데이터 로드 실패:', error);
+            }
+        }
+        
+        // 실시간 업데이트 시작
+        function startRealTimeUpdate() {
+            if (isRealTimeActive) return;
+            
+            const interval = parseInt(document.getElementById('update-interval').value) * 1000;
+            
+            realTimeUpdateInterval = setInterval(async () => {
+                try {
+                    const response = await fetch('/api/data/preview');
+                    const result = await response.json();
+                    
+                    if (response.ok && result.data) {
+                        updateChartsWithData(result.data);
+                        updateDataTable(result.data);
+                    }
+                } catch (error) {
+                    console.error('실시간 데이터 업데이트 실패:', error);
+                }
+            }, interval);
+            
+            isRealTimeActive = true;
+            updateStatus();
+            showAlert('control-alert', '실시간 업데이트가 시작되었습니다.', 'success');
+        }
+        
+        // 실시간 업데이트 중지
+        function stopRealTimeUpdate() {
+            if (realTimeUpdateInterval) {
+                clearInterval(realTimeUpdateInterval);
+                realTimeUpdateInterval = null;
+            }
+            
+            isRealTimeActive = false;
+            updateStatus();
+            showAlert('control-alert', '실시간 업데이트가 중지되었습니다.', 'info');
+        }
+        
+        // 차트 데이터 업데이트
+        function updateChartsWithData(data) {
+            const now = new Date().toLocaleTimeString();
+            
+            // 온도 차트 업데이트
+            if (data.temperature && data.temperature.tool0) {
+                const nozzleTemp = data.temperature.tool0.actual || 0;
+                const bedTemp = data.temperature.bed ? data.temperature.bed.actual : 0;
+                
+                updateChart(charts.temperature, now, [nozzleTemp, bedTemp]);
+            }
+            
+            // 위치 차트 업데이트
+            if (data.position) {
+                const x = data.position.x || 0;
+                const y = data.position.y || 0;
+                const z = data.position.z || 0;
+                
+                updateChart(charts.position, now, [x, y, z]);
+            }
+            
+            // 진행률 차트 업데이트
+            if (data.progress) {
+                const progress = data.progress.completion || 0;
+                updateChart(charts.progress, now, [progress]);
+            }
+            
+            // 시스템 차트 업데이트
+            if (data.system_info) {
+                const cpu = data.system_info.cpu_usage || 0;
+                const memory = data.system_info.memory_usage || 0;
+                
+                updateChart(charts.system, now, [cpu, memory]);
+            }
+            
+            // 종합 차트 업데이트
+            if (data.temperature && data.progress) {
+                const nozzleTemp = data.temperature.tool0 ? data.temperature.tool0.actual : 0;
+                const progress = data.progress.completion || 0;
+                
+                updateComprehensiveChart(now, nozzleTemp, progress);
+            }
+        }
+        
+        // 일반 차트 업데이트
+        function updateChart(chart, label, data) {
+            chart.data.labels.push(label);
+            chart.data.datasets.forEach((dataset, index) => {
+                dataset.data.push(data[index] || 0);
+            });
+            
+            // 최대 20개 데이터 포인트 유지
+            if (chart.data.labels.length > 20) {
+                chart.data.labels.shift();
+                chart.data.datasets.forEach(dataset => {
+                    dataset.data.shift();
+                });
+            }
+            
+            chart.update('none');
+        }
+        
+        // 종합 차트 업데이트
+        function updateComprehensiveChart(label, temperature, progress) {
+            const chart = charts.comprehensive;
+            
+            chart.data.labels.push(label);
+            chart.data.datasets[0].data.push(temperature);
+            chart.data.datasets[1].data.push(progress);
+            
+            // 최대 30개 데이터 포인트 유지
+            if (chart.data.labels.length > 30) {
+                chart.data.labels.shift();
+                chart.data.datasets.forEach(dataset => {
+                    dataset.data.shift();
+                });
+            }
+            
+            chart.update('none');
+        }
+        
+        // 데이터 테이블 업데이트
+        function updateDataTable(data) {
+            const tbody = document.getElementById('data-table-body');
+            tbody.innerHTML = '';
+            
+            const timestamp = new Date().toLocaleString();
+            
+            // 온도 데이터
+            if (data.temperature) {
+                const nozzleTemp = data.temperature.tool0 ? data.temperature.tool0.actual : 0;
+                const bedTemp = data.temperature.bed ? data.temperature.bed.actual : 0;
+                
+                addTableRow(tbody, timestamp, '온도', `노즐: ${nozzleTemp}°C, 베드: ${bedTemp}°C`, '정상');
+            }
+            
+            // 위치 데이터
+            if (data.position) {
+                const position = `X: ${data.position.x || 0}, Y: ${data.position.y || 0}, Z: ${data.position.z || 0}`;
+                addTableRow(tbody, timestamp, '위치', position, '정상');
+            }
+            
+            // 진행률 데이터
+            if (data.progress) {
+                const progress = `${data.progress.completion || 0}%`;
+                addTableRow(tbody, timestamp, '진행률', progress, '정상');
+            }
+            
+            // 시스템 데이터
+            if (data.system_info) {
+                const system = `CPU: ${data.system_info.cpu_usage || 0}%, 메모리: ${data.system_info.memory_usage || 0}%`;
+                addTableRow(tbody, timestamp, '시스템', system, '정상');
+            }
+        }
+        
+        // 테이블 행 추가
+        function addTableRow(tbody, time, type, value, status) {
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td>${time}</td>
+                <td>${type}</td>
+                <td>${value}</td>
+                <td>${status}</td>
+            `;
+            tbody.appendChild(row);
+            
+            // 최대 10개 행 유지
+            if (tbody.children.length > 10) {
+                tbody.removeChild(tbody.firstChild);
+            }
+        }
+        
+        // 상태 업데이트
+        function updateStatus() {
+            const statusDot = document.getElementById('update-status');
+            const statusText = document.getElementById('update-text');
+            
+            if (isRealTimeActive) {
+                statusDot.classList.add('active');
+                statusText.textContent = '실시간 업데이트 활성화됨';
+            } else {
+                statusDot.classList.remove('active');
+                statusText.textContent = '실시간 업데이트 비활성화됨';
+            }
+        }
+        
+        // 차트 내보내기
+        function exportChart() {
+            const dataType = document.getElementById('data-type').value;
+            const chart = charts[dataType];
+            
+            if (chart) {
+                const canvas = chart.canvas;
+                const link = document.createElement('a');
+                link.download = `factor-chart-${dataType}-${new Date().toISOString().split('T')[0]}.png`;
+                link.href = canvas.toDataURL();
+                link.click();
+                
+                showAlert('control-alert', '차트가 성공적으로 내보내졌습니다.', 'success');
+            }
+        }
+        
+        // 알림 표시
+        function showAlert(alertId, message, type) {
+            const alert = document.getElementById(alertId);
+            alert.textContent = message;
+            alert.className = `alert ${type}`;
+            alert.style.display = 'block';
+            
+            // 5초 후 자동 숨김
+            setTimeout(() => {
+                alert.style.display = 'none';
+            }, 5000);
+        }
+        
+        // 페이지 언로드 시 정리
+        window.addEventListener('beforeunload', function() {
+            if (realTimeUpdateInterval) {
+                clearInterval(realTimeUpdateInterval);
+            }
+        });
+    </script>
+</body>
+</html> 

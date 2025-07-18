@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Factor Client - 대시보드</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            font-weight: 700;
+        }
+        
+        .header .nav-links {
+            display: flex;
+            gap: 20px;
+        }
+        
+        .header .nav-links a {
+            color: white;
+            text-decoration: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            transition: background 0.3s ease;
+        }
+        
+        .header .nav-links a:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+        
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 20px;
+            padding: 30px;
+        }
+        
+        .main-section {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        
+        .status-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+        }
+        
+        .status-card {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 25px;
+            text-align: center;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
+            border-left: 4px solid #667eea;
+        }
+        
+        .status-card h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+        }
+        
+        .status-card .value {
+            font-size: 2.5em;
+            font-weight: 700;
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+        
+        .status-card .unit {
+            color: #666;
+            font-size: 0.9em;
+        }
+        
+        .temperature-chart {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
+        }
+        
+        .temperature-chart h3 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 1.3em;
+        }
+        
+        .chart-container {
+            height: 300px;
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            position: relative;
+        }
+        
+        .chart-placeholder {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: #666;
+            font-style: italic;
+        }
+        
+        .progress-section {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
+        }
+        
+        .progress-section h3 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 1.3em;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 30px;
+            background: #e9ecef;
+            border-radius: 15px;
+            overflow: hidden;
+            margin-bottom: 15px;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            transition: width 0.5s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 600;
+        }
+        
+        .progress-info {
+            display: flex;
+            justify-content: space-between;
+            color: #666;
+            font-size: 0.9em;
+        }
+        
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        
+        .control-panel {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
+        }
+        
+        .control-panel h3 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 1.3em;
+        }
+        
+        .control-group {
+            margin-bottom: 20px;
+        }
+        
+        .control-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .control-group input {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 16px;
+        }
+        
+        .control-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .btn {
+            width: 100%;
+            padding: 12px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.3s ease;
+            margin-bottom: 10px;
+        }
+        
+        .btn:hover {
+            background: #5a6fd8;
+        }
+        
+        .btn-danger {
+            background: #dc3545;
+        }
+        
+        .btn-danger:hover {
+            background: #c82333;
+        }
+        
+        .btn-warning {
+            background: #ffc107;
+            color: #333;
+        }
+        
+        .btn-warning:hover {
+            background: #e0a800;
+        }
+        
+        .log-section {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
+            flex-grow: 1;
+        }
+        
+        .log-section h3 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 1.3em;
+        }
+        
+        .log-container {
+            background: #2d3748;
+            color: #e2e8f0;
+            border-radius: 8px;
+            padding: 15px;
+            height: 300px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+            line-height: 1.4;
+        }
+        
+        .log-entry {
+            margin-bottom: 5px;
+            padding: 2px 0;
+        }
+        
+        .log-entry.info {
+            color: #63b3ed;
+        }
+        
+        .log-entry.warning {
+            color: #f6ad55;
+        }
+        
+        .log-entry.error {
+            color: #fc8181;
+        }
+        
+        .connection-status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #dc3545;
+        }
+        
+        .status-indicator.connected {
+            background: #28a745;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        
+        @media (max-width: 1024px) {
+            .dashboard-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .header {
+                flex-direction: column;
+                gap: 20px;
+            }
+            
+            .header .nav-links {
+                flex-wrap: wrap;
+                justify-content: center;
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .status-cards {
+                grid-template-columns: 1fr;
+            }
+            
+            .header h1 {
+                font-size: 2em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>대시보드</h1>
+            <div class="nav-links">
+                <a href="/">홈</a>
+                <a href="/settings">설정</a>
+                <a href="/api/status">API</a>
+            </div>
+        </div>
+        
+        <div class="dashboard-grid">
+            <div class="main-section">
+                <div class="connection-status">
+                    <div class="status-indicator" id="connection-indicator"></div>
+                    <span id="connection-text">3D 프린터 서버 연결 상태 확인 중...</span>
+                </div>
+                
+                <div class="status-cards">
+                    <div class="status-card">
+                        <h3>프린터 상태</h3>
+                        <div class="value" id="printer-state">확인 중...</div>
+                        <div class="unit">현재 상태</div>
+                    </div>
+                    
+                    <div class="status-card">
+                        <h3>노즐 온도</h3>
+                        <div class="value" id="nozzle-temp">0°C</div>
+                        <div class="unit">현재 / 목표</div>
+                    </div>
+                    
+                    <div class="status-card">
+                        <h3>베드 온도</h3>
+                        <div class="value" id="bed-temp">0°C</div>
+                        <div class="unit">현재 / 목표</div>
+                    </div>
+                    
+                    <div class="status-card">
+                        <h3>진행률</h3>
+                        <div class="value" id="progress-value">0%</div>
+                        <div class="unit">완료율</div>
+                    </div>
+                </div>
+                
+                <div class="temperature-chart">
+                    <h3>온도 모니터링</h3>
+                    <div class="chart-container">
+                        <div class="chart-placeholder">
+                            온도 차트가 여기에 표시됩니다
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="progress-section">
+                    <h3>프린트 진행률</h3>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progress-fill" style="width: 0%">0%</div>
+                    </div>
+                    <div class="progress-info">
+                        <span id="progress-time">시간: --:-- / --:--</span>
+                        <span id="progress-layers">레이어: -- / --</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="sidebar">
+                <div class="control-panel">
+                    <h3>제어 패널</h3>
+                    
+                    <div class="control-group">
+                        <label for="nozzle-target">노즐 목표 온도 (°C)</label>
+                        <input type="number" id="nozzle-target" value="200" min="0" max="300">
+                    </div>
+                    
+                    <div class="control-group">
+                        <label for="bed-target">베드 목표 온도 (°C)</label>
+                        <input type="number" id="bed-target" value="60" min="0" max="120">
+                    </div>
+                    
+                    <button class="btn" onclick="setTemperature()">온도 설정</button>
+                    <button class="btn btn-warning" onclick="emergencyStop()">비상 정지</button>
+                    <button class="btn" onclick="homeAll()">모든 축 홈</button>
+                    <button class="btn" onclick="refreshStatus()">상태 새로고침</button>
+                </div>
+                
+                <div class="log-section">
+                    <h3>시스템 로그</h3>
+                    <div class="log-container" id="log-container">
+                        <div class="log-entry info">시스템 로그를 불러오는 중...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let statusUpdateInterval;
+        
+        // 페이지 로드 시 초기화
+        document.addEventListener('DOMContentLoaded', function() {
+            loadStatus();
+            loadLogs();
+            
+            // 3초마다 상태 업데이트
+            statusUpdateInterval = setInterval(loadStatus, 3000);
+            
+            // 10초마다 로그 업데이트
+            setInterval(loadLogs, 10000);
+        });
+        
+        // 페이지 언로드 시 인터벌 정리
+        window.addEventListener('beforeunload', function() {
+            if (statusUpdateInterval) {
+                clearInterval(statusUpdateInterval);
+            }
+        });
+        
+        // 상태 정보 불러오기
+        async function loadStatus() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+                
+                if (response.ok) {
+                    updateDashboard(data);
+                } else {
+                    updateDashboard({
+                        connected: false,
+                        printer_status: { state: '연결 없음' },
+                        temperature_info: { 
+                            tool0: { actual: 0, target: 0 },
+                            bed: { actual: 0, target: 0 }
+                        },
+                        progress: { 
+                            completion: 0,
+                            time_elapsed: 0,
+                            time_left: 0,
+                            layers: { current: 0, total: 0 }
+                        }
+                    });
+                }
+            } catch (error) {
+                console.error('상태 정보 로드 실패:', error);
+                updateDashboard({
+                    connected: false,
+                    printer_status: { state: '오류' },
+                    temperature_info: { 
+                        tool0: { actual: 0, target: 0 },
+                        bed: { actual: 0, target: 0 }
+                    },
+                    progress: { 
+                        completion: 0,
+                        time_elapsed: 0,
+                        time_left: 0,
+                        layers: { current: 0, total: 0 }
+                    }
+                });
+            }
+        }
+        
+        // 대시보드 업데이트
+        function updateDashboard(data) {
+            // 연결 상태
+            const indicator = document.getElementById('connection-indicator');
+            const connectionText = document.getElementById('connection-text');
+            
+            if (data.connected) {
+                indicator.classList.add('connected');
+                connectionText.textContent = '3D 프린터 서버에 연결됨';
+            } else {
+                indicator.classList.remove('connected');
+                connectionText.textContent = '3D 프린터 서버 연결 안됨';
+            }
+            
+            // 프린터 상태
+            const printerState = document.getElementById('printer-state');
+            if (data.printer_status && data.printer_status.state) {
+                printerState.textContent = data.printer_status.state;
+            } else {
+                printerState.textContent = '알 수 없음';
+            }
+            
+            // 온도 정보
+            const nozzleTemp = document.getElementById('nozzle-temp');
+            const bedTemp = document.getElementById('bed-temp');
+            
+            if (data.temperature_info) {
+                if (data.temperature_info.tool0) {
+                    const actual = data.temperature_info.tool0.actual || 0;
+                    const target = data.temperature_info.tool0.target || 0;
+                    nozzleTemp.textContent = `${actual}°C`;
+                    nozzleTemp.title = `목표: ${target}°C`;
+                }
+                
+                if (data.temperature_info.bed) {
+                    const actual = data.temperature_info.bed.actual || 0;
+                    const target = data.temperature_info.bed.target || 0;
+                    bedTemp.textContent = `${actual}°C`;
+                    bedTemp.title = `목표: ${target}°C`;
+                }
+            }
+            
+            // 진행률
+            const progressValue = document.getElementById('progress-value');
+            const progressFill = document.getElementById('progress-fill');
+            const progressTime = document.getElementById('progress-time');
+            const progressLayers = document.getElementById('progress-layers');
+            
+            if (data.progress) {
+                const completion = data.progress.completion || 0;
+                progressValue.textContent = `${completion.toFixed(1)}%`;
+                progressFill.style.width = `${completion}%`;
+                progressFill.textContent = `${completion.toFixed(1)}%`;
+                
+                // 시간 정보
+                const elapsed = data.progress.time_elapsed || 0;
+                const left = data.progress.time_left || 0;
+                const elapsedStr = formatTime(elapsed);
+                const leftStr = formatTime(left);
+                progressTime.textContent = `시간: ${elapsedStr} / ${leftStr}`;
+                
+                // 레이어 정보
+                if (data.progress.layers) {
+                    const current = data.progress.layers.current || 0;
+                    const total = data.progress.layers.total || 0;
+                    progressLayers.textContent = `레이어: ${current} / ${total}`;
+                }
+            }
+        }
+        
+        // 시간 포맷팅
+        function formatTime(seconds) {
+            if (!seconds || seconds === 0) return '--:--';
+            
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            
+            if (hours > 0) {
+                return `${hours}:${minutes.toString().padStart(2, '0')}`;
+            } else {
+                return `${minutes}:${(seconds % 60).toString().padStart(2, '0')}`;
+            }
+        }
+        
+        // 로그 불러오기
+        async function loadLogs() {
+            try {
+                const response = await fetch('/api/logs');
+                const data = await response.json();
+                
+                if (response.ok && data.logs) {
+                    updateLogs(data.logs);
+                }
+            } catch (error) {
+                console.error('로그 로드 실패:', error);
+            }
+        }
+        
+        // 로그 업데이트
+        function updateLogs(logs) {
+            const container = document.getElementById('log-container');
+            
+            // 최근 50개 로그만 표시
+            const recentLogs = logs.slice(-50);
+            
+            container.innerHTML = '';
+            recentLogs.forEach(log => {
+                const entry = document.createElement('div');
+                entry.className = 'log-entry';
+                
+                // 로그 레벨에 따른 클래스 추가
+                if (log.includes('ERROR') || log.includes('error')) {
+                    entry.classList.add('error');
+                } else if (log.includes('WARNING') || log.includes('warning')) {
+                    entry.classList.add('warning');
+                } else {
+                    entry.classList.add('info');
+                }
+                
+                entry.textContent = log;
+                container.appendChild(entry);
+            });
+            
+            // 스크롤을 맨 아래로
+            container.scrollTop = container.scrollHeight;
+        }
+        
+        // 온도 설정
+        async function setTemperature() {
+            const nozzleTarget = document.getElementById('nozzle-target').value;
+            const bedTarget = document.getElementById('bed-target').value;
+            
+            try {
+                // 노즐 온도 설정
+                if (nozzleTarget > 0) {
+                    await sendGcode(`M104 S${nozzleTarget}`);
+                }
+                
+                // 베드 온도 설정
+                if (bedTarget > 0) {
+                    await sendGcode(`M140 S${bedTarget}`);
+                }
+                
+                addLogEntry('온도 설정 완료', 'info');
+            } catch (error) {
+                addLogEntry('온도 설정 실패: ' + error.message, 'error');
+            }
+        }
+        
+        // 비상 정지
+        async function emergencyStop() {
+            if (confirm('정말로 비상 정지하시겠습니까?')) {
+                try {
+                    await sendGcode('M112');
+                    addLogEntry('비상 정지 명령 전송', 'warning');
+                } catch (error) {
+                    addLogEntry('비상 정지 실패: ' + error.message, 'error');
+                }
+            }
+        }
+        
+        // 모든 축 홈
+        async function homeAll() {
+            try {
+                await sendGcode('G28');
+                addLogEntry('모든 축 홈 명령 전송', 'info');
+            } catch (error) {
+                addLogEntry('홈 명령 실패: ' + error.message, 'error');
+            }
+        }
+        
+        // 상태 새로고침
+        function refreshStatus() {
+            loadStatus();
+            addLogEntry('상태 정보 새로고침', 'info');
+        }
+        
+        // G-code 전송
+        async function sendGcode(command) {
+            const response = await fetch('/api/printer/command', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ command: command })
+            });
+            
+            const result = await response.json();
+            
+            if (!response.ok) {
+                throw new Error(result.error || '명령 전송 실패');
+            }
+            
+            return result;
+        }
+        
+        // 로그 엔트리 추가
+        function addLogEntry(message, level = 'info') {
+            const container = document.getElementById('log-container');
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${level}`;
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            container.appendChild(entry);
+            
+            // 스크롤을 맨 아래로
+            container.scrollTop = container.scrollHeight;
+        }
+    </script>
+</body>
+</html> 

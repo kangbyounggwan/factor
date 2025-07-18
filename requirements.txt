@@ -1,0 +1,21 @@
+# Core dependencies
+pyserial>=3.5
+requests>=2.31.0
+pyyaml>=6.0.1
+flask>=2.3.3
+flask-socketio>=5.3.6
+python-socketio>=5.9.0
+
+# System monitoring
+psutil>=5.9.6
+
+# Data handling
+dataclasses-json>=0.6.1
+marshmallow>=3.20.1
+
+# Logging and configuration
+colorlog>=6.7.0
+watchdog>=3.0.0
+
+# Platform specific (install manually if needed)
+# RPi.GPIO>=0.7.1  # Raspberry Pi only 

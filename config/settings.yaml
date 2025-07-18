@@ -1,0 +1,83 @@
+# Factor Client 설정 파일
+# 라즈베리파이용 설정
+
+# ========================================
+# Windows 개발/테스트용 설정 (주석 처리됨)
+# ========================================
+
+# server:
+#   host: "0.0.0.0"
+#   port: 5000  # 8080 대신 5000 포트 사용
+#   debug: true
+
+# # 프린터 설정 (Windows 테스트용 - 시뮬레이션 모드)
+# printer:
+#   port: ""  # Windows에서는 빈 문자열 (시뮬레이션)
+#   baudrate: 115200
+#   auto_detect: false
+#   simulation_mode: true  # 실제 프린터 없이 시뮬레이션
+#   timeout: 5
+
+# logging:
+#   level: "DEBUG"  # 더 자세한 로그를 위해 DEBUG로 변경
+#   file: "logs/factor-client.log"
+#   max_size: "10MB"  # 문자열 형태로 지정
+#   backup_count: 5
+
+# # OctoPrint 연동 (선택사항)
+# octoprint:
+#   host: "localhost"
+#   port: 5000
+#   api_key: "test-api-key"  # Windows 테스트용 더미 키
+
+# # 시스템 설정 (Windows에서는 비활성화)
+# system:
+#   enable_hotspot: false
+#   wifi_interface: "wlan0"
+#   hotspot_ssid: "Factor-Client"
+#   hotspot_password: "factor123"
+
+# ========================================
+# 라즈베리파이용 설정 (활성화됨)
+# ========================================
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+  debug: false
+
+# 프린터 설정 (라즈베리파이용 - 실제 프린터 연결)
+printer:
+  port: "/dev/ttyUSB0"  # 실제 프린터 포트
+  baudrate: 115200
+  auto_detect: true
+  simulation_mode: false  # 실제 프린터 연결
+  timeout: 5
+  firmware_types:
+    - "marlin"
+    - "repetier"
+    - "smoothieware"
+    - "grbl"
+
+logging:
+  level: "INFO"
+  file: "/var/log/factor-client/factor-client.log"
+  max_size: 10485760
+  backup_count: 5
+
+system:
+  enable_hotspot: true  # 핫스팟 기능 활성화
+  wifi_interface: "wlan0"
+  hotspot_ssid: "Factor-Client"
+  hotspot_password: "factor123"
+  gpio_enabled: true  # GPIO 기능 활성화
+
+camera:
+  enabled: true
+  stream_url: "http://localhost:8080/?action=stream"
+  snapshot_url: "http://localhost:8080/?action=snapshot"
+
+octoprint:
+  host: "192.168.1.100"  # 실제 OctoPrint 서버 IP
+  port: 5000
+  api_key: "YOUR_OCTOPRINT_API_KEY_HERE" 

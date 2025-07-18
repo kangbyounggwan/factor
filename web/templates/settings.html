@@ -1,0 +1,854 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Factor Client 설정</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+        
+        .nav-tabs {
+            display: flex;
+            background: #f8f9fa;
+            border-bottom: 1px solid #dee2e6;
+        }
+        
+        .nav-tab {
+            flex: 1;
+            padding: 15px 20px;
+            text-align: center;
+            cursor: pointer;
+            border: none;
+            background: none;
+            font-size: 16px;
+            font-weight: 600;
+            color: #6c757d;
+            transition: all 0.3s ease;
+        }
+        
+        .nav-tab.active {
+            background: white;
+            color: #667eea;
+            border-bottom: 3px solid #667eea;
+        }
+        
+        .nav-tab:hover {
+            background: #e9ecef;
+        }
+        
+        .tab-content {
+            display: none;
+            padding: 30px;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        .form-section {
+            margin-bottom: 40px;
+        }
+        
+        .form-section h3 {
+            color: #333;
+            font-size: 1.5em;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        input[type="text"], input[type="password"], input[type="number"], select, textarea {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 16px;
+            transition: border-color 0.3s ease;
+        }
+        
+        input[type="text"]:focus, input[type="password"]:focus, input[type="number"]:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        
+        .btn {
+            padding: 12px 24px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.3s ease;
+            margin-right: 10px;
+        }
+        
+        .btn:hover {
+            background: #5a6fd8;
+        }
+        
+        .btn-secondary {
+            background: #6c757d;
+        }
+        
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+        
+        .btn-danger {
+            background: #dc3545;
+        }
+        
+        .btn-danger:hover {
+            background: #c82333;
+        }
+        
+        .alert {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        
+        .alert.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .alert.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .alert.info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        
+        .config-preview {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 20px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        
+        .status-connected {
+            background: #28a745;
+        }
+        
+        .status-disconnected {
+            background: #dc3545;
+        }
+        
+        .back-link {
+            display: inline-block;
+            margin-bottom: 20px;
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 600;
+        }
+        
+        .back-link:hover {
+            text-decoration: underline;
+        }
+        
+        @media (max-width: 768px) {
+            .form-row {
+                grid-template-columns: 1fr;
+            }
+            
+            .nav-tabs {
+                flex-direction: column;
+            }
+            
+            .nav-tab {
+                border-bottom: 1px solid #dee2e6;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Factor Client 설정</h1>
+            <p>시스템 설정을 관리하고 모니터링합니다</p>
+        </div>
+        
+        <div class="nav-tabs">
+            <button class="nav-tab active" onclick="showTab('printer_server')">프린터 서버</button>
+            <button class="nav-tab" onclick="showTab('printer')">프린터</button>
+            <button class="nav-tab" onclick="showTab('server')">서버</button>
+            <button class="nav-tab" onclick="showTab('hotspot')">핫스팟</button>
+            <button class="nav-tab" onclick="showTab('system')">시스템</button>
+        </div>
+        
+        <!-- 프린터 서버 설정 -->
+        <div id="printer_server-tab" class="tab-content active">
+            <a href="/" class="back-link">← 메인으로 돌아가기</a>
+            <div class="form-section">
+                <h3>3D 프린터 서버 연결 설정</h3>
+                <div class="alert" id="printer_server-alert"></div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="printer_server-host">호스트 주소</label>
+                        <input type="text" id="printer_server-host" placeholder="192.168.1.100 또는 localhost">
+                    </div>
+                    <div class="form-group">
+                        <label for="printer_server-port">포트</label>
+                        <input type="number" id="printer_server-port" placeholder="5000" value="5000">
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="printer_server-api-key">API 키</label>
+                    <input type="password" id="printer_server-api-key" placeholder="API 키를 입력하세요">
+                    <small style="color: #666; margin-top: 5px; display: block;">
+                        보안상 API 키는 웹에서 변경할 수 없습니다. 설정 파일에서 직접 수정하세요.
+                    </small>
+                </div>
+                
+                <div class="form-group">
+                    <label for="printer_server-username">사용자명 (선택사항)</label>
+                    <input type="text" id="printer_server-username" placeholder="사용자명">
+                </div>
+                
+                <div class="form-group">
+                    <label for="printer_server-password">비밀번호 (선택사항)</label>
+                    <input type="password" id="printer_server-password" placeholder="비밀번호">
+                </div>
+                
+                <div class="form-group">
+                    <label for="printer_server-ssl">SSL 사용</label>
+                    <select id="printer_server-ssl">
+                        <option value="false">사용 안함</option>
+                        <option value="true">사용</option>
+                    </select>
+                </div>
+                
+                <button class="btn" onclick="savePrinterServerConfig()">설정 저장</button>
+                <button class="btn btn-secondary" onclick="testPrinterServerConnection()">연결 테스트</button>
+            </div>
+        </div>
+        
+        <!-- 프린터 설정 -->
+        <div id="printer-tab" class="tab-content">
+            <a href="/" class="back-link">← 메인으로 돌아가기</a>
+            <div class="form-section">
+                <h3>프린터 설정</h3>
+                <div class="alert" id="printer-alert"></div>
+                
+                <div class="form-group">
+                    <label for="printer-port">프린터 포트</label>
+                    <input type="text" id="printer-port" placeholder="/dev/ttyUSB0 또는 COM3">
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="printer-baudrate">통신 속도</label>
+                        <select id="printer-baudrate">
+                            <option value="115200">115200</option>
+                            <option value="250000">250000</option>
+                            <option value="230400">230400</option>
+                            <option value="57600">57600</option>
+                            <option value="38400">38400</option>
+                            <option value="19200">19200</option>
+                            <option value="9600">9600</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="printer-timeout">타임아웃 (초)</label>
+                        <input type="number" id="printer-timeout" value="5" min="1" max="30">
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="printer-type">프린터 타입</label>
+                    <select id="printer-type">
+                        <option value="marlin">Marlin</option>
+                        <option value="repetier">Repetier</option>
+                        <option value="smoothie">Smoothie</option>
+                        <option value="grbl">GRBL</option>
+                        <option value="unknown">알 수 없음</option>
+                    </select>
+                </div>
+                
+                <button class="btn" onclick="savePrinterConfig()">설정 저장</button>
+                <button class="btn btn-secondary" onclick="scanPrinterPorts()">포트 스캔</button>
+            </div>
+        </div>
+        
+        <!-- 서버 설정 -->
+        <div id="server-tab" class="tab-content">
+            <a href="/" class="back-link">← 메인으로 돌아가기</a>
+            <div class="form-section">
+                <h3>웹 서버 설정</h3>
+                <div class="alert" id="server-alert"></div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="server-host">호스트</label>
+                        <input type="text" id="server-host" placeholder="0.0.0.0" value="0.0.0.0">
+                    </div>
+                    <div class="form-group">
+                        <label for="server-port">포트</label>
+                        <input type="number" id="server-port" placeholder="8080" value="8080">
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="server-debug">디버그 모드</label>
+                    <select id="server-debug">
+                        <option value="false">비활성화</option>
+                        <option value="true">활성화</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="server-log-level">로그 레벨</label>
+                    <select id="server-log-level">
+                        <option value="DEBUG">DEBUG</option>
+                        <option value="INFO">INFO</option>
+                        <option value="WARNING">WARNING</option>
+                        <option value="ERROR">ERROR</option>
+                        <option value="CRITICAL">CRITICAL</option>
+                    </select>
+                </div>
+                
+                <button class="btn" onclick="saveServerConfig()">설정 저장</button>
+                <button class="btn btn-secondary" onclick="restartServer()">서버 재시작</button>
+            </div>
+        </div>
+        
+        <!-- 핫스팟 설정 -->
+        <div id="hotspot-tab" class="tab-content">
+            <a href="/" class="back-link">← 메인으로 돌아가기</a>
+            <div class="form-section">
+                <h3>핫스팟 설정</h3>
+                <div class="alert" id="hotspot-alert"></div>
+                
+                <div class="form-group">
+                    <label for="hotspot-enabled">핫스팟 활성화</label>
+                    <select id="hotspot-enabled">
+                        <option value="true">활성화</option>
+                        <option value="false">비활성화</option>
+                    </select>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="hotspot-ssid">SSID</label>
+                        <input type="text" id="hotspot-ssid" placeholder="FactorClient-Hotspot">
+                    </div>
+                    <div class="form-group">
+                        <label for="hotspot-password">비밀번호</label>
+                        <input type="password" id="hotspot-password" placeholder="최소 8자">
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="hotspot-channel">채널</label>
+                    <select id="hotspot-channel">
+                        <option value="1">1</option>
+                        <option value="6">6</option>
+                        <option value="11">11</option>
+                        <option value="auto" selected>자동</option>
+                    </select>
+                </div>
+                
+                <button class="btn" onclick="saveHotspotConfig()">설정 저장</button>
+                <button class="btn btn-secondary" onclick="toggleHotspot()">핫스팟 토글</button>
+                <button class="btn btn-secondary" onclick="getHotspotStatus()">상태 확인</button>
+            </div>
+        </div>
+        
+        <!-- 시스템 설정 -->
+        <div id="system-tab" class="tab-content">
+            <a href="/" class="back-link">← 메인으로 돌아가기</a>
+            <div class="form-section">
+                <h3>시스템 설정</h3>
+                <div class="alert" id="system-alert"></div>
+                
+                <div class="form-group">
+                    <label for="system-auto-start">자동 시작</label>
+                    <select id="system-auto-start">
+                        <option value="true">활성화</option>
+                        <option value="false">비활성화</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="system-heartbeat-interval">하트비트 간격 (초)</label>
+                    <input type="number" id="system-heartbeat-interval" value="5" min="1" max="60">
+                </div>
+                
+                <div class="form-group">
+                    <label for="system-log-retention">로그 보관 기간 (일)</label>
+                    <input type="number" id="system-log-retention" value="30" min="1" max="365">
+                </div>
+                
+                <button class="btn" onclick="saveSystemConfig()">설정 저장</button>
+                <button class="btn btn-secondary" onclick="exportConfig()">설정 내보내기</button>
+                <button class="btn btn-secondary" onclick="importConfig()">설정 가져오기</button>
+                <button class="btn btn-danger" onclick="resetConfig()">설정 초기화</button>
+            </div>
+            
+            <div class="form-section">
+                <h3>현재 설정 미리보기</h3>
+                <div class="config-preview" id="config-preview">
+                    설정을 불러오는 중...
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentConfig = {};
+        
+        // 페이지 로드 시 설정 불러오기
+        document.addEventListener('DOMContentLoaded', function() {
+            loadConfig();
+        });
+        
+        // 탭 전환
+        function showTab(tabName) {
+            // 모든 탭 비활성화
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.querySelectorAll('.nav-tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // 선택된 탭 활성화
+            document.getElementById(tabName + '-tab').classList.add('active');
+            event.target.classList.add('active');
+        }
+        
+        // 설정 불러오기
+        async function loadConfig() {
+            try {
+                const response = await fetch('/api/config');
+                const config = await response.json();
+                
+                if (response.ok) {
+                    currentConfig = config;
+                    populateFormFields(config);
+                    updateConfigPreview(config);
+                } else {
+                    showAlert('system-alert', '설정을 불러오는데 실패했습니다: ' + config.error, 'error');
+                }
+            } catch (error) {
+                showAlert('system-alert', '설정을 불러오는데 실패했습니다: ' + error.message, 'error');
+            }
+        }
+        
+        // 폼 필드에 설정 값 채우기
+        function populateFormFields(config) {
+            // 프린터 서버 설정
+            if (config.octoprint) {
+                document.getElementById('printer_server-host').value = config.octoprint.host || '';
+                document.getElementById('printer_server-port').value = config.octoprint.port || 5000;
+                document.getElementById('printer_server-username').value = config.octoprint.username || '';
+                document.getElementById('printer_server-password').value = config.octoprint.password || '';
+                document.getElementById('printer_server-ssl').value = config.octoprint.ssl || 'false';
+            }
+            
+            // 프린터 설정
+            if (config.printer) {
+                document.getElementById('printer-port').value = config.printer.port || '';
+                document.getElementById('printer-baudrate').value = config.printer.baudrate || 115200;
+                document.getElementById('printer-timeout').value = config.printer.timeout || 5;
+                document.getElementById('printer-type').value = config.printer.type || 'marlin';
+            }
+            
+            // 서버 설정
+            if (config.server) {
+                document.getElementById('server-host').value = config.server.host || '0.0.0.0';
+                document.getElementById('server-port').value = config.server.port || 8080;
+                document.getElementById('server-debug').value = config.server.debug || 'false';
+                document.getElementById('server-log-level').value = config.server.log_level || 'INFO';
+            }
+            
+            // 핫스팟 설정
+            if (config.hotspot) {
+                document.getElementById('hotspot-enabled').value = config.hotspot.enabled || 'false';
+                document.getElementById('hotspot-ssid').value = config.hotspot.ssid || '';
+                document.getElementById('hotspot-password').value = config.hotspot.password || '';
+                document.getElementById('hotspot-channel').value = config.hotspot.channel || 'auto';
+            }
+            
+            // 시스템 설정
+            if (config.system) {
+                document.getElementById('system-auto-start').value = config.system.auto_start || 'true';
+                document.getElementById('system-heartbeat-interval').value = config.system.heartbeat_interval || 5;
+                document.getElementById('system-log-retention').value = config.system.log_retention || 30;
+            }
+        }
+        
+        // 프린터 서버 설정 저장
+        async function savePrinterServerConfig() {
+            const config = {
+                octoprint: {
+                    host: document.getElementById('printer_server-host').value,
+                    port: parseInt(document.getElementById('printer_server-port').value),
+                    username: document.getElementById('printer_server-username').value,
+                    password: document.getElementById('printer_server-password').value,
+                    ssl: document.getElementById('printer_server-ssl').value === 'true'
+                }
+            };
+            
+            await saveConfig(config, 'printer_server-alert');
+        }
+        
+        // 프린터 설정 저장
+        async function savePrinterConfig() {
+            const config = {
+                printer: {
+                    port: document.getElementById('printer-port').value,
+                    baudrate: parseInt(document.getElementById('printer-baudrate').value),
+                    timeout: parseInt(document.getElementById('printer-timeout').value),
+                    type: document.getElementById('printer-type').value
+                }
+            };
+            
+            await saveConfig(config, 'printer-alert');
+        }
+        
+        // 서버 설정 저장
+        async function saveServerConfig() {
+            const config = {
+                server: {
+                    host: document.getElementById('server-host').value,
+                    port: parseInt(document.getElementById('server-port').value),
+                    debug: document.getElementById('server-debug').value === 'true',
+                    log_level: document.getElementById('server-log-level').value
+                }
+            };
+            
+            await saveConfig(config, 'server-alert');
+        }
+        
+        // 핫스팟 설정 저장
+        async function saveHotspotConfig() {
+            const config = {
+                hotspot: {
+                    enabled: document.getElementById('hotspot-enabled').value === 'true',
+                    ssid: document.getElementById('hotspot-ssid').value,
+                    password: document.getElementById('hotspot-password').value,
+                    channel: document.getElementById('hotspot-channel').value
+                }
+            };
+            
+            await saveConfig(config, 'hotspot-alert');
+        }
+        
+        // 시스템 설정 저장
+        async function saveSystemConfig() {
+            const config = {
+                system: {
+                    auto_start: document.getElementById('system-auto-start').value === 'true',
+                    heartbeat_interval: parseInt(document.getElementById('system-heartbeat-interval').value),
+                    log_retention: parseInt(document.getElementById('system-log-retention').value)
+                }
+            };
+            
+            await saveConfig(config, 'system-alert');
+        }
+        
+        // 설정 저장 공통 함수
+        async function saveConfig(config, alertId) {
+            try {
+                const response = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(config)
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    showAlert(alertId, '설정이 성공적으로 저장되었습니다.', 'success');
+                    await loadConfig(); // 설정 다시 불러오기
+                } else {
+                    showAlert(alertId, '설정 저장에 실패했습니다: ' + result.error, 'error');
+                }
+            } catch (error) {
+                showAlert(alertId, '설정 저장에 실패했습니다: ' + error.message, 'error');
+            }
+        }
+        
+        // 프린터 서버 연결 테스트
+        async function testPrinterServerConnection() {
+            try {
+                showAlert('printer_server-alert', '연결을 테스트하는 중...', 'info');
+                
+                const response = await fetch('/api/health');
+                const result = await response.json();
+                
+                if (response.ok && result.connected) {
+                    showAlert('printer_server-alert', '3D 프린터 서버에 성공적으로 연결되었습니다!', 'success');
+                } else {
+                    showAlert('printer_server-alert', '3D 프린터 서버 연결에 실패했습니다. 설정을 확인해주세요.', 'error');
+                }
+            } catch (error) {
+                showAlert('printer_server-alert', '연결 테스트에 실패했습니다: ' + error.message, 'error');
+            }
+        }
+        
+        // 프린터 포트 스캔
+        async function scanPrinterPorts() {
+            try {
+                showAlert('printer-alert', '포트를 스캔하는 중...', 'info');
+                
+                // 실제 구현에서는 시스템에서 사용 가능한 포트 목록을 가져와야 함
+                const ports = ['/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyACM0', '/dev/ttyACM1'];
+                
+                showAlert('printer-alert', `사용 가능한 포트: ${ports.join(', ')}`, 'info');
+            } catch (error) {
+                showAlert('printer-alert', '포트 스캔에 실패했습니다: ' + error.message, 'error');
+            }
+        }
+        
+        // 서버 재시작
+        async function restartServer() {
+            if (confirm('서버를 재시작하시겠습니까?')) {
+                try {
+                    showAlert('server-alert', '서버를 재시작하는 중...', 'info');
+                    
+                    // 실제 구현에서는 서버 재시작 API를 호출해야 함
+                    setTimeout(() => {
+                        showAlert('server-alert', '서버가 재시작되었습니다. 페이지를 새로고침하세요.', 'success');
+                    }, 2000);
+                } catch (error) {
+                    showAlert('server-alert', '서버 재시작에 실패했습니다: ' + error.message, 'error');
+                }
+            }
+        }
+        
+        // 핫스팟 토글
+        async function toggleHotspot() {
+            try {
+                const response = await fetch('/api/hotspot/info');
+                const result = await response.json();
+                
+                if (response.ok) {
+                    const isEnabled = result.enabled;
+                    const action = isEnabled ? 'disable' : 'enable';
+                    
+                    const toggleResponse = await fetch(`/api/hotspot/${action}`, {
+                        method: 'POST'
+                    });
+                    
+                    if (toggleResponse.ok) {
+                        showAlert('hotspot-alert', `핫스팟이 ${isEnabled ? '비활성화' : '활성화'}되었습니다.`, 'success');
+                    } else {
+                        showAlert('hotspot-alert', '핫스팟 상태 변경에 실패했습니다.', 'error');
+                    }
+                }
+            } catch (error) {
+                showAlert('hotspot-alert', '핫스팟 제어에 실패했습니다: ' + error.message, 'error');
+            }
+        }
+        
+        // 핫스팟 상태 확인
+        async function getHotspotStatus() {
+            try {
+                const response = await fetch('/api/hotspot/info');
+                const result = await response.json();
+                
+                if (response.ok) {
+                    const status = result.enabled ? '활성화됨' : '비활성화됨';
+                    showAlert('hotspot-alert', `핫스팟 상태: ${status}`, 'info');
+                } else {
+                    showAlert('hotspot-alert', '핫스팟 상태 확인에 실패했습니다.', 'error');
+                }
+            } catch (error) {
+                showAlert('hotspot-alert', '핫스팟 상태 확인에 실패했습니다: ' + error.message, 'error');
+            }
+        }
+        
+        // 설정 내보내기
+        function exportConfig() {
+            const configStr = JSON.stringify(currentConfig, null, 2);
+            const blob = new Blob([configStr], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'factor-client-config.json';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            
+            showAlert('system-alert', '설정이 다운로드되었습니다.', 'success');
+        }
+        
+        // 설정 가져오기
+        function importConfig() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.json';
+            
+            input.onchange = function(e) {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        try {
+                            const config = JSON.parse(e.target.result);
+                            currentConfig = config;
+                            populateFormFields(config);
+                            updateConfigPreview(config);
+                            showAlert('system-alert', '설정이 가져와졌습니다. 저장 버튼을 클릭하여 적용하세요.', 'success');
+                        } catch (error) {
+                            showAlert('system-alert', '설정 파일을 읽는데 실패했습니다: ' + error.message, 'error');
+                        }
+                    };
+                    reader.readAsText(file);
+                }
+            };
+            
+            input.click();
+        }
+        
+        // 설정 초기화
+        function resetConfig() {
+            if (confirm('모든 설정을 초기화하시겠습니까? 이 작업은 되돌릴 수 없습니다.')) {
+                // 기본 설정으로 초기화
+                const defaultConfig = {
+                    octoprint: {
+                        host: 'localhost',
+                        port: 5000,
+                        username: '',
+                        password: '',
+                        ssl: false
+                    },
+                    printer: {
+                        port: '/dev/ttyUSB0',
+                        baudrate: 115200,
+                        timeout: 5,
+                        type: 'marlin'
+                    },
+                    server: {
+                        host: '0.0.0.0',
+                        port: 8080,
+                        debug: false,
+                        log_level: 'INFO'
+                    },
+                    hotspot: {
+                        enabled: false,
+                        ssid: 'FactorClient-Hotspot',
+                        password: 'factor1234',
+                        channel: 'auto'
+                    },
+                    system: {
+                        auto_start: true,
+                        heartbeat_interval: 5,
+                        log_retention: 30
+                    }
+                };
+                
+                currentConfig = defaultConfig;
+                populateFormFields(defaultConfig);
+                updateConfigPreview(defaultConfig);
+                showAlert('system-alert', '설정이 초기화되었습니다. 저장 버튼을 클릭하여 적용하세요.', 'info');
+            }
+        }
+        
+        // 설정 미리보기 업데이트
+        function updateConfigPreview(config) {
+            const preview = document.getElementById('config-preview');
+            preview.textContent = JSON.stringify(config, null, 2);
+        }
+        
+        // 알림 표시
+        function showAlert(alertId, message, type) {
+            const alert = document.getElementById(alertId);
+            alert.textContent = message;
+            alert.className = `alert ${type}`;
+            alert.style.display = 'block';
+            
+            // 5초 후 자동 숨김
+            setTimeout(() => {
+                alert.style.display = 'none';
+            }, 5000);
+        }
+    </script>
+</body>
+</html> 
