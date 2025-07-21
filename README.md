@@ -86,6 +86,25 @@ sudo systemctl restart factor-client
 sudo journalctl -u factor-client -f
 ```
 
+### 업데이트
+
+```bash
+# 자동 업데이트 (Git pull + 의존성 업데이트 + 서비스 재시작)
+./scripts/update.sh
+
+# 특정 브랜치에서 업데이트
+./scripts/update.sh -b main
+
+# 의존성 업데이트 건너뛰기
+./scripts/update.sh --skip-deps
+
+# 설정 파일 복사 건너뛰기
+./scripts/update.sh --skip-config
+
+# 도움말 보기
+./scripts/update.sh --help
+```
+
 ## 🔧 개발
 
 ### 로컬 개발 환경
