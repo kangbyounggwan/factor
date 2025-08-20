@@ -273,9 +273,35 @@ class FactorClient:
         def watchdog_worker():
             while self.running:
                 try:
-                    # 하트비트 확인
-                    if time.time() - self.last_heartbeat > 60:  # 60초 타임아웃
-                        self.logger.error("하트비트 타임아웃 - 재시작 시도")
+                    current_time = time.time()
+                    time_since_heartbeat = current_time - self.last_heartbeat
+                    
+                    # 하트비트 상태 상세 로깅
+                    self.logger.debug(f"워치독 체크 - 마지막 하트비트: {time_since_heartbeat:.1f}초 전")
+                    
+                    # 하트비트 타임아웃 체크
+                    if time_since_heartbeat > 60:  # 60초 타임아웃
+                        self.logger.error(f"하트비트 타임아웃 발생!")
+                        self.logger.error(f"  - 마지막 하트비트: {time_since_heartbeat:.1f}초 전")
+                        self.logger.error(f"  - 현재 시간: {datetime.fromtimestamp(current_time)}")
+                        self.logger.error(f"  - 마지막 하트비트 시간: {datetime.fromtimestamp(self.last_heartbeat)}")
+                        
+                        # 프린터 연결 상태 상세 정보
+                        if self.printer_comm:
+                            self.logger.error(f"  - 프린터 통신 상태: {self.printer_comm.connected}")
+                            self.logger.error(f"  - 프린터 포트: {self.printer_comm.port}")
+                            self.logger.error(f"  - 프린터 상태: {self.printer_comm.state}")
+                        else:
+                            self.logger.error("  - 프린터 통신 객체가 없음")
+                        
+                        # 시스템 상태 정보
+                        self.logger.error(f"  - 클라이언트 연결 상태: {self.connected}")
+                        self.logger.error(f"  - 클라이언트 실행 상태: {self.running}")
+                        
+                        # 스레드 상태 확인
+                        active_threads = [t for t in self.polling_threads if t.is_alive()]
+                        self.logger.error(f"  - 활성 폴링 스레드: {len(active_threads)}/{len(self.polling_threads)}")
+                        
                         self._handle_error("heartbeat_timeout")
                     
                     # 메모리 사용량 확인
@@ -286,7 +312,7 @@ class FactorClient:
                     time.sleep(30)  # 30초마다 확인
                     
                 except Exception as e:
-                    self.logger.error(f"워치독 오류: {e}")
+                    self.logger.error(f"워치독 오류: {e}", exc_info=True)
                     time.sleep(30)
         
         self.watchdog_thread = threading.Thread(target=watchdog_worker, daemon=True)
@@ -298,7 +324,42 @@ class FactorClient:
         self.error_count += 1
         max_errors = self.config.get('system.power_management.max_error_count', 5)
         
-        self.logger.error(f"오류 발생: {error_type} (총 {self.error_count}회)")
+        # 오류 발생 시 상세 정보 로깅
+        self.logger.error(f"=== 오류 발생 상세 정보 ===")
+        self.logger.error(f"오류 타입: {error_type}")
+        self.logger.error(f"오류 횟수: {self.error_count}/{max_errors}")
+        self.logger.error(f"발생 시간: {datetime.now()}")
+        
+        # 시스템 상태 상세 정보
+        self.logger.error(f"시스템 상태:")
+        self.logger.error(f"  - 클라이언트 실행 중: {self.running}")
+        self.logger.error(f"  - 프린터 연결됨: {self.connected}")
+        self.logger.error(f"  - 마지막 하트비트: {datetime.fromtimestamp(self.last_heartbeat)}")
+        
+        if self.printer_comm:
+            self.logger.error(f"  - 프린터 통신 상태: {self.printer_comm.connected}")
+            self.logger.error(f"  - 프린터 포트: {self.printer_comm.port}")
+            self.logger.error(f"  - 프린터 상태: {self.printer_comm.state}")
+        
+        # 스레드 상태
+        active_worker_threads = [t for t in self.worker_threads if t.is_alive()]
+        active_polling_threads = [t for t in self.polling_threads if t.is_alive()]
+        
+        self.logger.error(f"스레드 상태:")
+        self.logger.error(f"  - 워커 스레드: {len(active_worker_threads)}/{len(self.worker_threads)} 활성")
+        self.logger.error(f"  - 폴링 스레드: {len(active_polling_threads)}/{len(self.polling_threads)} 활성")
+        
+        # 메모리 및 CPU 상태
+        try:
+            memory = psutil.virtual_memory()
+            cpu_percent = psutil.cpu_percent()
+            self.logger.error(f"시스템 리소스:")
+            self.logger.error(f"  - 메모리 사용률: {memory.percent}%")
+            self.logger.error(f"  - CPU 사용률: {cpu_percent}%")
+        except Exception as e:
+            self.logger.error(f"시스템 리소스 정보 수집 실패: {e}")
+        
+        self.logger.error(f"================================")
         
         if self.error_count >= max_errors:
             if self.config.get('system.power_management.auto_reboot_on_error', False):
@@ -378,24 +439,45 @@ class FactorClient:
     # 프린터 콜백 함수들
     def _on_printer_state_change(self, status: PrinterStatus):
         """프린터 상태 변경 콜백"""
+        old_state = getattr(self, 'printer_status', None)
+        old_state_name = old_state.state if old_state else "None"
+        
         self.printer_status = status
         self.last_heartbeat = time.time()
+        
+        # 하트비트 업데이트 상세 로깅
+        self.logger.debug(f"하트비트 업데이트 - 프린터 상태 변경: {old_state_name} → {status.state}")
+        self.logger.debug(f"  - 하트비트 시간: {datetime.fromtimestamp(self.last_heartbeat)}")
+        self.logger.debug(f"  - 상태 플래그: {status.flags}")
+        
         self._trigger_callback('on_printer_state_change', status)
         self.logger.info(f"프린터 상태 변경: {status.state}")
     
     def _on_temperature_update(self, temp_info: TemperatureInfo):
         """온도 업데이트 콜백"""
+        # 온도 업데이트 시에도 하트비트 업데이트
+        self.last_heartbeat = time.time()
+        self.logger.debug(f"하트비트 업데이트 - 온도 업데이트")
+        
         self._trigger_callback('on_temperature_update', temp_info)
         self.logger.debug(f"온도 업데이트: {temp_info}")
     
     def _on_position_update(self, position: Position):
         """위치 업데이트 콜백"""
+        # 위치 업데이트 시에도 하트비트 업데이트
+        self.last_heartbeat = time.time()
+        self.logger.debug(f"하트비트 업데이트 - 위치 업데이트")
+        
         self.position_data = position
         self._trigger_callback('on_position_update', position)
         self.logger.debug(f"위치 업데이트: {position}")
     
     def _on_gcode_response(self, response):
         """G-code 응답 콜백"""
+        # G-code 응답 시에도 하트비트 업데이트
+        self.last_heartbeat = time.time()
+        self.logger.debug(f"하트비트 업데이트 - G-code 응답")
+        
         self._trigger_callback('on_gcode_response', response)
         self._trigger_callback('on_message', response.response)
         self.logger.debug(f"G-code 응답: {response.response}")
