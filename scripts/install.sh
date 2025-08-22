@@ -91,7 +91,7 @@ create_user() {
     fi
     
     # 필요한 그룹에 추가
-    usermod -a -G i2c,spi,gpio factor 2>/dev/null || true
+    usermod -a -G i2c,spi,gpio,dialout factor 2>/dev/null || true
 }
 
 # 디렉토리 생성
@@ -248,6 +248,32 @@ setup_service() {
     fi
 }
 
+# USB 장치 권한 설정
+setup_usb_permissions() {
+    log_step "USB 장치 권한 설정 중..."
+    
+    # udev 규칙 생성 - CH340 USB-to-Serial 변환기
+    cat > /etc/udev/rules.d/99-factor-client.rules << 'EOF'
+# Factor Client 3D 프린터 USB 장치 권한 설정
+# CH340 USB-to-Serial 변환기
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", MODE="0660", OWNER="factor", GROUP="dialout"
+
+# 일반적인 3D 프린터 USB 장치들
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="5740", MODE="0660", OWNER="factor", GROUP="dialout"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", MODE="0660", OWNER="factor", GROUP="dialout"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="067b", ATTRS{idProduct}=="2303", MODE="0660", OWNER="factor", GROUP="dialout"
+
+# FTDI USB-to-Serial 변환기
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", MODE="0660", OWNER="factor", GROUP="dialout"
+EOF
+    
+    # udev 규칙 적용
+    udevadm control --reload-rules
+    udevadm trigger
+    
+    log_info "USB 장치 권한 설정 완료"
+}
+
 # 방화벽 설정
 setup_firewall() {
     log_step "방화벽 설정 중..."
@@ -297,6 +323,7 @@ main() {
     setup_logrotate
     optimize_system
     setup_readonly_root
+    setup_usb_permissions
     setup_service
     setup_firewall
     installation_complete

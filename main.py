@@ -128,7 +128,8 @@ class FactorClientFirmware:
                     port=port,
                     debug=debug,
                     use_reloader=False,
-                    log_output=False
+                    log_output=False,
+                    allow_unsafe_werkzeug=True  # 프로덕션 환경에서 실행 허용
                 )
             
             server_thread = threading.Thread(target=run_server, daemon=True)

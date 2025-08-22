@@ -1,46 +1,18 @@
 [Unit]
 Description=Factor OctoPrint Client Firmware
-Documentation=https://github.com/factor-client/firmware
-After=network-online.target
-Wants=network-online.target
-Requires=network.target
+After=network.target
 
 [Service]
-Type=notify
+Type=simple
 User=factor
 Group=factor
 WorkingDirectory=/opt/factor-client
-ExecStart=/opt/factor-client/venv/bin/python /opt/factor-client/main.py --daemon
-ExecReload=/bin/kill -HUP $MAINPID
-KillMode=mixed
-KillSignal=SIGTERM
-TimeoutStopSec=30
+ExecStart=/opt/factor-client/venv/bin/python main.py
 Restart=always
 RestartSec=10
-
-# 환경 변수
-Environment=PYTHONPATH=/opt/factor-client
-Environment=FACTOR_LOG_LEVEL=INFO
-
-# 보안 설정
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/var/log /var/lib/factor-client /tmp
-
-# 리소스 제한
-MemoryMax=512M
-CPUQuota=50%
-
-# 워치독 설정
-WatchdogSec=60
-NotifyAccess=all
-
-# 로그 설정
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=factor-client
+Environment=PYTHONUNBUFFERED=1
 
 [Install]
-WantedBy=multi-user.target 
+WantedBy=multi-user.target

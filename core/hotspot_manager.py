@@ -96,21 +96,21 @@ class HotspotManager:
     def _create_hostapd_config(self):
         """hostapd 설정 파일 생성"""
         config_content = f"""
-interface=wlan0
-driver=nl80211
-ssid={self.hotspot_config['ssid']}
-hw_mode=g
-channel={self.hotspot_config['channel']}
-wmm_enabled=0
-macaddr_acl=0
-auth_algs=1
-ignore_broadcast_ssid=0
-wpa=2
-wpa_passphrase={self.hotspot_config['password']}
-wpa_key_mgmt=WPA-PSK
-wpa_pairwise=TKIP
-rsn_pairwise=CCMP
-"""
+        interface=wlan0
+        driver=nl80211
+        ssid={self.hotspot_config['ssid']}
+        hw_mode=g
+        channel={self.hotspot_config['channel']}
+        wmm_enabled=0
+        macaddr_acl=0
+        auth_algs=1
+        ignore_broadcast_ssid=0
+        wpa=2
+        wpa_passphrase={self.hotspot_config['password']}
+        wpa_key_mgmt=WPA-PSK
+        wpa_pairwise=TKIP
+        rsn_pairwise=CCMP
+        """
         
         with open('/etc/hostapd/hostapd.conf', 'w') as f:
             f.write(config_content.strip())
@@ -118,9 +118,9 @@ rsn_pairwise=CCMP
     def _create_dnsmasq_config(self):
         """dnsmasq 설정 파일 생성"""
         config_content = f"""
-interface=wlan0
-dhcp-range=192.168.4.2,192.168.4.20,255.255.255.0,24h
-"""
+        interface=wlan0
+        dhcp-range=192.168.4.2,192.168.4.20,255.255.255.0,24h
+        """
         
         with open('/etc/dnsmasq.conf', 'w') as f:
             f.write(config_content.strip())
@@ -176,15 +176,15 @@ dhcp-range=192.168.4.2,192.168.4.20,255.255.255.0,24h
             
             # wpa_supplicant.conf 파일 생성
             wpa_config = f"""
-country=KR
-ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
-update_config=1
+                country=KR
+                ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+                update_config=1
 
-network={{
-    ssid="{ssid}"
-    psk="{password}"
-}}
-"""
+                network={{
+                    ssid="{ssid}"
+                    psk="{password}"
+                }}
+            """
             
             with open('/etc/wpa_supplicant/wpa_supplicant.conf', 'w') as f:
                 f.write(wpa_config.strip())

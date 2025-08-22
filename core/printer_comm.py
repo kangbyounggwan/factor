@@ -14,7 +14,6 @@ from dataclasses import dataclass
 from enum import Enum
 
 from .data_models import *
-import logging
 from .printer_types import (
     PrinterType, FirmwareType, PrinterDetector, 
     PrinterHandlerFactory, ExtendedDataCollector
@@ -256,19 +255,23 @@ class PrinterCommunicator:
             self.logger.info(f"프린터 상태 변경: {old_state.value} -> {new_state.value}")
             
             # 상태 변경 콜백
-            status = PrinterStatus(
-                state=new_state.value,
-                timestamp=time.time(),
-                flags={
-                    'operational': new_state in [PrinterState.OPERATIONAL, PrinterState.PRINTING, PrinterState.PAUSED],
-                    'printing': new_state == PrinterState.PRINTING,
-                    'paused': new_state == PrinterState.PAUSED,
-                    'error': new_state == PrinterState.ERROR,
-                    'ready': new_state == PrinterState.OPERATIONAL,
-                    'connected': new_state != PrinterState.DISCONNECTED
-                }
-            )
+            status = self._create_printer_status(new_state)
             self._trigger_callback('on_state_change', status)
+    
+    def _create_printer_status(self, state: PrinterState) -> PrinterStatus:
+        """프린터 상태 객체 생성 (중복 제거)"""
+        return PrinterStatus(
+            state=state.value,
+            timestamp=time.time(),
+            flags={
+                'operational': state in [PrinterState.OPERATIONAL, PrinterState.PRINTING, PrinterState.PAUSED],
+                'printing': state == PrinterState.PRINTING,
+                'paused': state == PrinterState.PAUSED,
+                'error': state == PrinterState.ERROR,
+                'ready': state == PrinterState.OPERATIONAL,
+                'connected': state != PrinterState.DISCONNECTED
+            }
+        )
     
     def _read_worker(self):
         """시리얼 읽기 워커"""
@@ -458,53 +461,86 @@ class PrinterCommunicator:
         
         # 우선순위 명령은 큐 앞쪽에 추가
         if priority:
-            # 임시로 큐의 모든 항목을 빼고 우선순위 명령을 먼저 넣기
-            temp_commands = []
-            try:
-                while True:
-                    temp_commands.append(self.command_queue.get_nowait())
-            except Empty:
-                pass
-            
-            self.command_queue.put(command)
-            
-            for cmd in temp_commands:
-                self.command_queue.put(cmd)
+            self._insert_priority_command(command)
         else:
             self.command_queue.put(command)
         
         return True
     
-    def send_gcode(self, gcode: str) -> bool:
-        """G-code 명령 전송 (외부 인터페이스)"""
-        return self.send_command(gcode)
+    def _insert_priority_command(self, command: str):
+        """우선순위 명령을 큐 앞쪽에 삽입"""
+        # 임시로 큐의 모든 항목을 빼고 우선순위 명령을 먼저 넣기
+        temp_commands = []
+        try:
+            while True:
+                temp_commands.append(self.command_queue.get_nowait())
+        except Empty:
+            pass
+        
+        self.command_queue.put(command)
+        
+        for cmd in temp_commands:
+            self.command_queue.put(cmd)
+    
+    def send_command_and_wait(self, command: str, timeout: float = 5.0) -> Optional[str]:
+        """G-code 명령 전송 후 응답 대기"""
+        if not self.connected:
+            self.logger.warning("프린터가 연결되지 않음")
+            return None
+        
+        try:
+            # 명령 전송
+            self.send_command(command)
+            
+            # 응답 대기
+            start_time = time.time()
+            while time.time() - start_time < timeout:
+                if hasattr(self, 'last_response') and self.last_response:
+                    response = self.last_response
+                    self.last_response = None  # 응답 사용 후 초기화
+                    return response
+                time.sleep(0.1)  # 100ms 대기
+            
+            self.logger.warning(f"명령 '{command}' 응답 타임아웃")
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"명령 전송 및 응답 대기 실패: {e}")
+            return None
+    
+
     
     def get_temperature_info(self) -> TemperatureInfo:
         """현재 온도 정보 반환"""
-        # 최신 온도 요청
-        self.send_command("M105")
-        return TemperatureInfo(tool=self.current_temps.copy())
+        try:
+            # 최신 온도 요청 및 응답 대기
+            response = self.send_command_and_wait("M105", timeout=5.0)
+            if response:
+                # 응답 파싱하여 온도 정보 업데이트
+                self._parse_temperature_response(response)
+            
+            return TemperatureInfo(tool=self.current_temps.copy())
+        except Exception as e:
+            self.logger.error(f"온도 정보 수집 실패: {e}")
+            return TemperatureInfo(tool=self.current_temps.copy())
     
     def get_position(self) -> Position:
         """현재 위치 정보 반환"""
-        # 최신 위치 요청
-        self.send_command("M114")
-        return self.current_position
+        try:
+            # 최신 위치 요청 및 응답 대기
+            response = self.send_command_and_wait("M114", timeout=5.0)
+            if response:
+                # 응답 파싱하여 위치 정보 업데이트
+                self._parse_position_response(response)
+            
+            return self.current_position
+        except Exception as e:
+            self.logger.error(f"위치 정보 수집 실패: {e}")
+            return self.current_position
     
     def get_printer_status(self) -> PrinterStatus:
         """프린터 상태 반환"""
-        return PrinterStatus(
-            state=self.state.value,
-            timestamp=time.time(),
-            flags={
-                'operational': self.state in [PrinterState.OPERATIONAL, PrinterState.PRINTING, PrinterState.PAUSED],
-                'printing': self.state == PrinterState.PRINTING,
-                'paused': self.state == PrinterState.PAUSED,
-                'error': self.state == PrinterState.ERROR,
-                'ready': self.state == PrinterState.OPERATIONAL,
-                'connected': self.connected
-            }
-        )
+        return self._create_printer_status(self.state)
     
     def get_firmware_info(self) -> FirmwareInfo:
         """펌웨어 정보 반환"""
@@ -551,6 +587,44 @@ class PrinterCommunicator:
         """비상 정지"""
         self.send_command("M112", priority=True)
         self._set_state(PrinterState.ERROR)
+    
+    def _parse_temperature_response(self, response: str):
+        """온도 응답 파싱 (M105) - 통합된 파싱 사용"""
+        try:
+            # 기존 온도 파싱 로직 사용
+            if self._parse_temperature(response):
+                self.logger.debug(f"온도 응답 파싱 완료: {self.current_temps}")
+        except Exception as e:
+            self.logger.error(f"온도 응답 파싱 실패: {e}")
+    
+    def _parse_position_response(self, response: str):
+        """위치 응답 파싱 (M114)"""
+        try:
+            # M114 응답 예시: "X:0.00 Y:0.00 Z:0.00 E:0.00"
+            if "X:" in response and "Y:" in response and "Z:" in response:
+                # X축 위치 파싱
+                x_match = re.search(r'X:(-?\d+\.?\d*)', response)
+                if x_match:
+                    self.current_position.x = float(x_match.group(1))
+                
+                # Y축 위치 파싱
+                y_match = re.search(r'Y:(-?\d+\.?\d*)', response)
+                if y_match:
+                    self.current_position.y = float(y_match.group(1))
+                
+                # Z축 위치 파싱
+                z_match = re.search(r'Z:(-?\d+\.?\d*)', response)
+                if z_match:
+                    self.current_position.z = float(z_match.group(1))
+                
+                # E축 위치 파싱
+                e_match = re.search(r'E:(-?\d+\.?\d*)', response)
+                if e_match:
+                    self.current_position.e = float(e_match.group(1))
+                
+                self.logger.debug(f"위치 파싱 완료: {self.current_position}")
+        except Exception as e:
+            self.logger.error(f"위치 응답 파싱 실패: {e}")
     
     def _detect_printer_type(self):
         """프린터 타입 감지"""

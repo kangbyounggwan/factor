@@ -30,7 +30,18 @@
 
 ```bash
 # 라즈베리파이에서 실행
-curl -sSL https://raw.githubusercontent.com/your-repo/factor-client-firmware/main/scripts/install.sh | sudo bash
+curl -sSL https://raw.githubusercontent.com/kangbyounggwan/factor/master/scripts/install.sh | sudo bash
+```
+
+### 수동 설치
+
+```bash
+# GitHub에서 클론
+git clone https://github.com/kangbyounggwan/factor.git
+cd factor
+
+# 설치 스크립트 실행
+sudo bash scripts/install.sh
 ```
 
 ### 윈도우에서 SD카드 설정

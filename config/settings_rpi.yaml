@@ -19,8 +19,8 @@ logging:
 # 프린터 설정 (실제 하드웨어 연결)
 printer:
   simulation_mode: false  # 실제 프린터 연결
-  auto_detect: true       # USB 포트 자동 감지
-  port: ""                # 자동 감지 시 비워둠
+  auto_detect: false      # 수동으로 포트 지정
+  port: "/dev/ttyUSB0"    # CH340 USB-to-Serial 변환기
   baudrate: 115200
   firmware_type: "auto"
   temp_poll_interval: 2.0
