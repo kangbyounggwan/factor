@@ -41,21 +41,15 @@ class ConfigManager:
                 'port': 8080,
                 'debug': False
             },
-            'octoprint': {
-                'host': '127.0.0.1',
-                'port': 5000,
-                'api_key': '',
-                'use_ssl': False,
-                'connection': {
-                    'timeout': 10,
-                    'retry_interval': 5,
-                    'max_retries': 10
-                },
-                'polling': {
-                    'temperature': 2,
-                    'status': 1,
-                    'progress': 1
-                }
+            'printer': {
+                'simulation_mode': False,
+                'auto_detect': True,
+                'port': '',
+                'baudrate': 115200,
+                'firmware_type': 'auto',
+                'temp_poll_interval': 2.0,
+                'position_poll_interval': 5.0,
+                'timeout': 5
             },
             'logging': {
                 'level': 'INFO',
@@ -145,10 +139,9 @@ class ConfigManager:
     def _apply_env_overrides(self):
         """환경 변수로 설정 덮어쓰기"""
         env_mappings = {
-            'FACTOR_OCTOPRINT_HOST': ['octoprint', 'host'],
-            'FACTOR_OCTOPRINT_PORT': ['octoprint', 'port'],
-            'FACTOR_OCTOPRINT_API_KEY': ['octoprint', 'api_key'],
-            'FACTOR_OCTOPRINT_SSL': ['octoprint', 'use_ssl'],
+            'FACTOR_PRINTER_PORT': ['printer', 'port'],
+            'FACTOR_PRINTER_BAUDRATE': ['printer', 'baudrate'],
+            'FACTOR_PRINTER_SIMULATION': ['printer', 'simulation_mode'],
             'FACTOR_SERVER_HOST': ['server', 'host'],
             'FACTOR_SERVER_PORT': ['server', 'port'],
             'FACTOR_LOG_LEVEL': ['logging', 'level'],
@@ -284,11 +277,18 @@ class ConfigManager:
     def validate_config(self) -> bool:
         """설정 유효성 검사"""
         required_fields = [
-            'octoprint.host',
-            'octoprint.api_key',
             'server.host',
             'server.port'
         ]
+        
+        # OctoPrint 설정은 선택사항 (시뮬레이션 모드에서는 불필요)
+        printer_config = self.get('printer', {})
+        simulation_mode = printer_config.get('simulation_mode', False)
+        
+        if not simulation_mode:
+            # 실제 프린터 연결 모드에서는 프린터 설정 확인
+            if not printer_config.get('port') and not printer_config.get('auto_detect'):
+                self.logger.warning("프린터 포트가 설정되지 않았습니다. auto_detect를 true로 설정하거나 port를 지정하세요.")
         
         for field in required_fields:
             if not self.get(field):

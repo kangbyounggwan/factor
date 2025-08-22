@@ -1,0 +1,109 @@
+# 라즈베리파이 환경용 설정 파일
+# Factor Client Firmware - Raspberry Pi Configuration
+
+# 서버 설정
+server:
+  host: "0.0.0.0"
+  port: 8080
+  debug: false
+  log_level: "INFO"
+
+# 로깅 설정
+logging:
+  level: "INFO"
+  file: "logs/factor-client-rpi.log"
+  max_size: "50MB"
+  backup_count: 10
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# 프린터 설정 (실제 하드웨어 연결)
+printer:
+  simulation_mode: false  # 실제 프린터 연결
+  auto_detect: true       # USB 포트 자동 감지
+  port: ""                # 자동 감지 시 비워둠
+  baudrate: 115200
+  firmware_type: "auto"
+  temp_poll_interval: 2.0
+  position_poll_interval: 5.0
+
+# 핫스팟 설정 (라즈베리파이에서 활성화)
+hotspot:
+  enabled: true
+  ssid: "Factor-Client-RPi"
+  password: "factor1234"
+  channel: 6
+  country_code: "US"
+  interface: "wlan0"
+  dhcp_range: "192.168.4.2,192.168.4.20,24h"
+
+# 데이터 수집 설정
+data_collection:
+  enabled: true
+  interval: 2
+  save_to_file: true
+  file_path: "logs/data_rpi.csv"
+  max_file_size: "500MB"
+
+# 웹캠 설정 (라즈베리파이 카메라 모듈)
+webcam:
+  enabled: true
+  device: "/dev/video0"
+  resolution: "1280x720"
+  fps: 30
+  rotation: 0
+
+# 시스템 모니터링 설정
+monitoring:
+  cpu_threshold: 85
+  memory_threshold: 90
+  temperature_threshold: 80
+  disk_threshold: 95
+  check_interval: 60
+
+# GPIO 설정 (라즈베리파이 전용)
+gpio:
+  enabled: true
+  led_pin: 18
+  button_pin: 17
+  fan_pin: 23
+  buzzer_pin: 24
+
+# 네트워크 설정
+network:
+  wifi_ssid: "your_wifi_ssid"
+  wifi_password: "your_wifi_password"
+  static_ip: "192.168.1.100"
+  gateway: "192.168.1.1"
+  dns: "8.8.8.8"
+
+# 프린터 직접 통신 설정 (실제 하드웨어 연결)
+printer_direct:
+  enabled: true
+  simulation_mode: false
+  protocol: 'gcode'
+  commands:
+    get_temp: 'M105'
+    get_position: 'M114'
+    get_status: 'M115'
+    emergency_stop: 'M112'
+  firmware_support:
+    - 'marlin'
+    - 'repetier'
+    - 'smoothieware'
+    - 'grbl'
+
+# 시스템 설정
+system:
+  hostname: factor-client-rpi
+  timezone: UTC
+  power_management:
+    enable_watchdog: true
+    auto_reboot_on_error: true
+    max_error_count: 5
+  network:
+    wifi_country: US
+    enable_ssh: true
+    enable_vnc: false
+  storage:
+    enable_readonly_root: true
+    log_to_ram: true

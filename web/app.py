@@ -6,6 +6,7 @@ Flask 웹 애플리케이션
 from flask import Flask, render_template, request, jsonify # type: ignore
 from flask_socketio import SocketIO
 import logging
+import time
 from pathlib import Path
 
 from core import ConfigManager
@@ -81,15 +82,32 @@ def create_app(config_manager: ConfigManager, factor_client=None):
             return jsonify({'error': 'Factor client not available'}), 503
         
         try:
-            status_data = {
-                'printer_status': factor_client.get_printer_status().to_dict(),
-                'temperature_info': factor_client.get_temperature_info().to_dict(),
-                'position': factor_client.get_position().to_dict(),
-                'progress': factor_client.get_print_progress().to_dict(),
-                'system_info': factor_client.get_system_info().to_dict(),
-                'connected': factor_client.is_connected(),
-                'timestamp': factor_client.last_heartbeat
-            }
+            # 프린터 연결 상태 확인
+            is_connected = factor_client.is_connected()
+            
+            if is_connected:
+                status_data = {
+                    'printer_status': factor_client.get_printer_status().to_dict(),
+                    'temperature_info': factor_client.get_temperature_info().to_dict(),
+                    'position': factor_client.get_position().to_dict(),
+                    'progress': factor_client.get_print_progress().to_dict(),
+                    'system_info': factor_client.get_system_info().to_dict(),
+                    'connected': True,
+                    'timestamp': factor_client.last_heartbeat
+                }
+            else:
+                # 프린터가 연결되지 않은 경우 기본 상태 반환
+                status_data = {
+                    'printer_status': {'state': 'disconnected', 'message': '프린터 연결 대기 중'},
+                    'temperature_info': {'tool': {}, 'bed': {}},
+                    'position': {'x': 0, 'y': 0, 'z': 0, 'e': 0},
+                    'progress': {'completion': 0, 'print_time': 0},
+                    'system_info': factor_client.get_system_info().to_dict(),
+                    'connected': False,
+                    'timestamp': time.time(),
+                    'message': 'USB 포트에 프린터 연결을 기다리는 중입니다'
+                }
+            
             return jsonify(status_data)
         except Exception as e:
             logger.error(f"상태 정보 조회 오류: {e}")
@@ -170,7 +188,12 @@ def setup_socketio_handlers(socketio, factor_client):
             socketio.emit('progress_update', factor_client.get_print_progress().to_dict())
             socketio.emit('system_info', factor_client.get_system_info().to_dict())
         else:
-            socketio.emit('connection_error', {'message': 'OctoPrint에 연결되지 않음'})
+            # 프린터가 연결되지 않은 경우 연결 대기 상태 메시지 전송
+            socketio.emit('connection_status', {
+                'connected': False,
+                'message': 'USB 포트에 프린터 연결을 기다리는 중입니다',
+                'timestamp': time.time()
+            })
     
     # Factor 클라이언트 콜백 등록
     def on_printer_state_change(status):

@@ -130,7 +130,7 @@ class FactorClient:
         """클라이언트 시작"""
         if self.running:
             self.logger.warning("클라이언트가 이미 실행 중입니다")
-            return
+            return True  # 이미 실행 중이면 True 반환
         
         self.logger.info("Factor 클라이언트 시작")
         self.running = True
@@ -147,16 +147,19 @@ class FactorClient:
         if self.watchdog_enabled:
             self._start_watchdog()
         
-        # 프린터 연결
+        # 프린터 연결 시도 (실패해도 계속 실행)
         if self._connect_to_printer():
             self.connected = True
             self._start_polling_threads()
             self._trigger_callback('on_connect', None)
+            self.logger.info("3D 프린터 연결 성공")
         else:
-            self.logger.error("프린터 연결 실패")
-            return False
+            self.connected = False
+            self.logger.warning("프린터 연결 실패 - 연결 대기 모드로 실행")
+            # 연결 재시도 스레드 시작
+            self._start_connection_retry_thread()
         
-        return True
+        return True  # 연결 실패해도 True 반환
     
     def stop(self):
         """클라이언트 중지"""
@@ -599,4 +602,29 @@ class FactorClient:
             'camera': self.get_camera_info(),
             'connected': self.is_connected(),
             'timestamp': time.time()
-        } 
+        }
+    
+    def _start_connection_retry_thread(self):
+        """연결 재시도 스레드 시작"""
+        retry_thread = threading.Thread(target=self._connection_retry_worker, daemon=True)
+        retry_thread.start()
+        self.worker_threads.append(retry_thread)
+
+    def _connection_retry_worker(self):
+        """연결 재시도 워커"""
+        while self.running:
+            try:
+                time.sleep(30)  # 30초마다 재시도
+                
+                if not self.connected and self.printer_comm:
+                    self.logger.info("프린터 연결 재시도 중...")
+                    if self._connect_to_printer():
+                        self.connected = True
+                        self._start_polling_threads()
+                        self._trigger_callback('on_connect', None)
+                        self.logger.info("프린터 재연결 성공")
+                        break
+                        
+            except Exception as e:
+                self.logger.error(f"연결 재시도 오류: {e}")
+                time.sleep(5)  # 오류 발생 시 5초 대기 

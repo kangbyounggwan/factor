@@ -47,6 +47,43 @@ cd C:\path\to\factor-client-firmware
 
 ## 🌐 사용법
 
+### 환경별 실행
+
+#### 🐧 **라즈베리파이 환경**
+```bash
+# 자동 환경 감지 (권장)
+python main.py
+
+# 라즈베리파이 환경 명시적 지정
+python main.py --environment rpi
+
+# 실행 스크립트 사용
+./scripts/run-rpi.sh
+
+# 데몬 모드로 실행
+python main.py --environment rpi --daemon
+```
+
+#### 🪟 **WSL 환경 (Windows Subsystem for Linux)**
+```bash
+# WSL 환경 명시적 지정
+python main.py --environment wsl
+
+# 실행 스크립트 사용
+./scripts/run-wsl.sh
+
+# Windows에서 WSL로 실행
+.\scripts\run-wsl.bat
+```
+
+#### 🔧 **수동 설정 파일 지정**
+```bash
+# 특정 설정 파일 사용
+python main.py --config config/settings_wsl.yaml
+python main.py --config config/settings_rpi.yaml
+python main.py --config config/settings.yaml
+```
+
 ### 웹 인터페이스
 
 설치 후 웹 브라우저에서 접속:

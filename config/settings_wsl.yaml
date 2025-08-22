@@ -1,0 +1,96 @@
+server:
+  host: 0.0.0.0
+  port: 8080
+  debug: true
+  log_level: INFO
+printer:
+  simulation_mode: false
+  auto_detect: true
+  port: /dev/ttyUSB0
+  baudrate: 115200
+  firmware_type: auto
+  temp_poll_interval: 5.0
+  position_poll_interval: 10.0
+  timeout: 5
+  type: marlin
+  heartbeat_timeout: 120  # 60초 → 120초로 증가
+  connection_retry_interval: 30  # 재연결 시도 간격
+logging:
+  level: DEBUG  # INFO → DEBUG로 변경하여 더 자세한 로그 확인
+  file: logs/factor-client-wsl.log
+  max_size: 10MB
+  backup_count: 5
+  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+system:
+  hostname: factor-client-wsl
+  timezone: UTC
+  power_management:
+    enable_watchdog: true
+    auto_reboot_on_error: false  # 재부팅 방지
+    max_error_count: 10  # 3 → 10으로 증가
+    heartbeat_timeout: 120  # 워치독 하트비트 타임아웃
+    connection_check_interval: 15  # 연결 상태 확인 간격
+  network:
+    wifi_country: US
+    enable_ssh: true
+    enable_vnc: false
+  storage:
+    enable_readonly_root: false
+    log_to_ram: false
+display:
+  enable: false
+  type: ssd1306
+  width: 128
+  height: 64
+notifications:
+  enable: false
+  methods: []
+camera:
+  enable: false
+  stream_url: ''
+  snapshot_url: ''
+hotspot:
+  enabled: false
+  ssid: Factor-Client-WSL
+  password: factor1234
+  channel: 6
+  country_code: US
+data_collection:
+  enabled: true
+  interval: 5
+  save_to_file: true
+  file_path: logs/data_wsl.csv
+  max_file_size: 100MB
+webcam:
+  enabled: false
+  device: /dev/video0
+  resolution: 640x480
+  fps: 30
+monitoring:
+  cpu_threshold: 80
+  memory_threshold: 85
+  temperature_threshold: 70
+  disk_threshold: 90
+  check_interval: 30
+printer_direct:
+  enabled: true
+  simulation_mode: false  # true → false로 변경
+  protocol: gcode
+  commands:
+    get_temp: M105
+    get_position: M114
+    get_status: M115
+    emergency_stop: M112
+data_acquisition:
+  enabled: true
+  settings:
+    printer_status: true
+    temperature: true
+    position: true
+    progress: true
+    speed: false
+    system_info: true
+    network: false
+    power: true
+    environment: false
+    camera: false

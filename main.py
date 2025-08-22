@@ -75,15 +75,18 @@ class FactorClientFirmware:
             if platform.system() == "Linux":
                 self.hotspot_manager = HotspotManager(self.config_manager)
                 # 초기 WiFi 연결 확인 및 핫스팟 관리
-                self.hotspot_manager.auto_manage_hotspot()
+                try:
+                    self.hotspot_manager.auto_manage_hotspot()
+                except Exception as e:
+                    self.logger.warning(f"핫스팟 초기화 실패 (계속 진행): {e}")
             else:
                 self.logger.info(f"{platform.system()} 환경에서는 핫스팟 기능을 건너뜁니다.")
                 self.hotspot_manager = None
             
-            # Factor 클라이언트 시작
+            # Factor 클라이언트 시작 (연결 실패해도 계속 실행)
             self.factor_client = FactorClient(self.config_manager)
             if not self.factor_client.start():
-                self.logger.error("Factor 클라이언트 시작 실패")
+                self.logger.error("Factor 클라이언트 시작 실패 - 종료합니다")
                 return False
             
             # 웹 서버 시작
@@ -145,12 +148,16 @@ class FactorClientFirmware:
         
         try:
             while self.running:
-                # 상태 체크
+                # 상태 체크 - 연결 상태와 관계없이 계속 실행
                 if self.factor_client and not self.factor_client.running:
-                    self.logger.warning("Factor 클라이언트가 중지됨")
-                    break
+                    self.logger.warning("Factor 클라이언트가 중지됨 - 재시작 시도")
+                    # 클라이언트 재시작 시도
+                    if not self.factor_client.start():
+                        self.logger.error("Factor 클라이언트 재시작 실패")
+                        time.sleep(10)  # 10초 대기 후 계속
+                        continue
                 
-                # 주기적 작업 (예: 상태 저장, 로그 로테이션 등)
+                # 주기적 작업
                 self._periodic_tasks()
                 
                 # 1초 대기
@@ -216,10 +223,14 @@ class FactorClientFirmware:
 
 def main():
     """메인 함수"""
-    parser = argparse.ArgumentParser(description='Factor OctoPrint Client Firmware')
+    parser = argparse.ArgumentParser(description='Factor Client Firmware')
     parser.add_argument('-c', '--config', 
                        help='설정 파일 경로',
                        default=None)
+    parser.add_argument('-e', '--environment',
+                       choices=['wsl', 'rpi', 'auto'],
+                       default='auto',
+                       help='실행 환경 선택 (wsl: WSL, rpi: 라즈베리파이, auto: 자동 감지)')
     parser.add_argument('-d', '--daemon',
                        action='store_true',
                        help='데몬 모드로 실행')
@@ -228,6 +239,36 @@ def main():
                        version='Factor Client Firmware 1.0.0')
     
     args = parser.parse_args()
+    
+    # 환경별 설정 파일 자동 선택
+    config_path = args.config
+    if config_path is None:
+        if args.environment == 'wsl':
+            config_path = str(project_root / "config" / "settings_wsl.yaml")
+            print(f"WSL 환경 설정 파일 사용: {config_path}")
+        elif args.environment == 'rpi':
+            config_path = str(project_root / "config" / "settings_rpi.yaml")
+            print(f"라즈베리파이 환경 설정 파일 사용: {config_path}")
+        elif args.environment == 'auto':
+            # 자동 환경 감지
+            import platform
+            if "Microsoft" in platform.release():
+                config_path = str(project_root / "config" / "settings_wsl.yaml")
+                print(f"WSL 환경 감지됨 - 설정 파일: {config_path}")
+            else:
+                config_path = str(project_root / "config" / "settings_rpi.yaml")
+                print(f"라즈베리파이 환경 감지됨 - 설정 파일: {config_path}")
+    
+    # 설정 파일 존재 확인
+    if not Path(config_path).exists():
+        print(f"오류: 설정 파일을 찾을 수 없습니다: {config_path}")
+        print("사용 가능한 설정 파일:")
+        print("  - config/settings_wsl.yaml (WSL용)")
+        print("  - config/settings_rpi.yaml (라즈베리파이용)")
+        print("  - config/settings.yaml (기본)")
+        sys.exit(1)
+    
+    print(f"설정 파일: {config_path}")
     
     # 데몬 모드 처리
     if args.daemon:
@@ -242,7 +283,7 @@ def main():
                 working_directory='/',
                 umask=0o002,
             ):
-                firmware = FactorClientFirmware(args.config)
+                firmware = FactorClientFirmware(config_path)
                 firmware.start()
                 
         except ImportError:
@@ -254,7 +295,7 @@ def main():
             sys.exit(1)
     else:
         # 일반 모드
-        firmware = FactorClientFirmware(args.config)
+        firmware = FactorClientFirmware(config_path)
         
         try:
             success = firmware.start()
