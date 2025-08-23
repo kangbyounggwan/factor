@@ -77,6 +77,7 @@ class PrinterCommunicator:
         self.current_position = Position(0, 0, 0, 0)
         self.printer_info = {}
         self.sd_card_info = {}
+        self._last_temp_info = None  # 최근 온도 정보 캐시
         # 최근 관심 응답 라인 스냅샷 (동기 대기용)
         self._last_temp_line = None
         self._last_pos_line = None
@@ -430,35 +431,49 @@ class PrinterCommunicator:
         self._trigger_callback('on_response', response)
     
     def _parse_temperature(self, line: str) -> bool:
-        """온도 정보 파싱"""
-        matches = self.temp_pattern.findall(line)
-        if not matches:
-            return False
-        
+        """온도 정보 파싱 (Marlin 스타일: ok T:25.2 /0.0 B:24.3 /0.0 @:0 B@:0)"""
+        # 우선 간단 패턴으로 빠르게 파싱
+        # 노즐(툴0)
+        t_match = re.search(r"T:\s*(-?\d+\.?\d*)\s*/\s*(-?\d+\.?\d*)", line)
+        # 베드
+        b_match = re.search(r"B:\s*(-?\d+\.?\d*)\s*/\s*(-?\d+\.?\d*)", line)
+
         tools = {}
         bed = None
         chamber = None
-        
-        for match in matches:
-            sensor_type, sensor_num, actual, target = match
-            actual = float(actual)
-            target = float(target)
-            
-            temp_data = TemperatureData(actual=actual, target=target)
-            
-            if sensor_type == 'T':
-                tool_name = f"tool{sensor_num}" if sensor_num else "tool0"
-                tools[tool_name] = temp_data
-            elif sensor_type == 'B':
-                bed = temp_data
-            elif sensor_type == 'C':
-                chamber = temp_data
-        
+
+        if t_match:
+            actual = float(t_match.group(1))
+            target = float(t_match.group(2))
+            tools["tool0"] = TemperatureData(actual=actual, target=target)
+
+        if b_match:
+            actual = float(b_match.group(1))
+            target = float(b_match.group(2))
+            bed = TemperatureData(actual=actual, target=target)
+
+        # 확장 패턴(여러 툴, 챔버)이 필요한 경우 기존 정규식도 시도
+        if not tools and not bed:
+            matches = self.temp_pattern.findall(line)
+            for match in matches:
+                sensor_type, sensor_num, actual, target = match
+                actual = float(actual); target = float(target)
+                td = TemperatureData(actual=actual, target=target)
+                if sensor_type == 'T':
+                    tool_name = f"tool{sensor_num}" if sensor_num else "tool0"
+                    tools[tool_name] = td
+                elif sensor_type == 'B':
+                    bed = td
+                elif sensor_type == 'C':
+                    chamber = td
+
         if tools or bed or chamber:
             temp_info = TemperatureInfo(tool=tools, bed=bed, chamber=chamber)
+            # 캐시 및 콜백
+            self._last_temp_info = temp_info
             self._trigger_callback('on_temperature_update', temp_info)
             return True
-        
+
         return False
     
     def _parse_position(self, line: str) -> bool:
@@ -603,18 +618,19 @@ class PrinterCommunicator:
 
     
     def get_temperature_info(self) -> TemperatureInfo:
-        """현재 온도 정보 반환"""
+        """현재 온도 정보 반환 (동기 요청/파싱 결과 우선)"""
         try:
-            # 최신 온도 요청 및 응답 대기
             response = self.send_command_and_wait("M105", timeout=5.0)
             if response:
-                # 응답 파싱하여 온도 정보 업데이트
+                # 파싱 시도 → 내부 캐시에 저장됨
                 self._parse_temperature_response(response)
-            
-            return TemperatureInfo(tool=self.current_temps.copy())
+                if self._last_temp_info:
+                    return self._last_temp_info
+            # 파싱 실패 시 빈 구조 반환
+            return TemperatureInfo(tool={})
         except Exception as e:
             self.logger.error(f"온도 정보 수집 실패: {e}")
-            return TemperatureInfo(tool=self.current_temps.copy())
+            return TemperatureInfo(tool={})
     
     def get_position(self) -> Position:
         """현재 위치 정보 반환"""
