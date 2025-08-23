@@ -145,15 +145,36 @@ class PrinterCommunicator:
             self.serial_conn = serial.Serial(
                 port=self.port,
                 baudrate=self.baudrate,
-                timeout=1,
+                timeout=0.5,
                 write_timeout=1,
                 bytesize=serial.EIGHTBITS,
                 parity=serial.PARITY_NONE,
-                stopbits=serial.STOPBITS_ONE
+                stopbits=serial.STOPBITS_ONE,
+                rtscts=False,
+                dsrdtr=False
             )
             
-            # 연결 대기
-            time.sleep(2)
+            # 리셋/버퍼 클리어 및 안정화
+            try:
+                self.logger.info("시리얼 연결 안정화 중...")
+                
+                # DTR 리셋으로 보드 리셋
+                self.serial_conn.dtr = False
+                time.sleep(0.2)
+                self.serial_conn.dtr = True
+                
+                # 입력/출력 버퍼 클리어
+                self.serial_conn.reset_input_buffer()
+                self.serial_conn.reset_output_buffer()
+                
+                # 안정화 대기
+                time.sleep(2.0)
+                
+                self.logger.info("시리얼 연결 안정화 완료")
+                
+            except Exception as e:
+                self.logger.warning(f"시리얼 안정화 중 오류 (무시됨): {e}")
+                pass
             
             # 스레드 시작
             self.running = True
@@ -326,6 +347,9 @@ class PrinterCommunicator:
         """응답 처리"""
         self.logger.debug(f"응답 수신: {line}")
         
+        # 응답을 last_response에 저장 (send_command_and_wait용)
+        self.last_response = line
+        
         # 감지용 응답 저장
         self.detection_responses.append(line)
         
@@ -489,19 +513,24 @@ class PrinterCommunicator:
             return None
         
         try:
+            # last_response 초기화
+            self.last_response = None
+            
             # 명령 전송
+            self.logger.debug(f"명령 전송 및 응답 대기: {command}")
             self.send_command(command)
             
             # 응답 대기
             start_time = time.time()
             while time.time() - start_time < timeout:
-                if hasattr(self, 'last_response') and self.last_response:
+                if self.last_response:
                     response = self.last_response
+                    self.logger.debug(f"응답 수신: {response}")
                     self.last_response = None  # 응답 사용 후 초기화
                     return response
                 time.sleep(0.1)  # 100ms 대기
             
-            self.logger.warning(f"명령 '{command}' 응답 타임아웃")
+            self.logger.warning(f"명령 '{command}' 응답 타임아웃 ({timeout}초)")
             return None
             
         except Exception as e:
