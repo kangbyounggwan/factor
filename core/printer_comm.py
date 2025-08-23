@@ -78,6 +78,12 @@ class PrinterCommunicator:
         self.printer_info = {}
         self.sd_card_info = {}
         self._last_temp_info = None  # 최근 온도 정보 캐시
+        
+        # 진단용 최근 TX/RX 정보
+        self.last_tx_command: Optional[str] = None
+        self.last_tx_time: Optional[float] = None
+        self.last_rx_line: Optional[str] = None
+        self.last_rx_time: Optional[float] = None
         # 최근 관심 응답 라인 스냅샷 (동기 대기용)
         self._last_temp_line = None
         self._last_pos_line = None
@@ -377,6 +383,8 @@ class PrinterCommunicator:
         
         # 응답을 last_response에 저장 (send_command_and_wait용)
         self.last_response = line
+        self.last_rx_line = line
+        self.last_rx_time = time.time()
         
         # 감지용 응답 저장
         self.detection_responses.append(line)

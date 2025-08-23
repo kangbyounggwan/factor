@@ -3,16 +3,26 @@ Flask 웹 애플리케이션
 라즈베리파이 최적화된 웹 인터페이스
 """
 
-from flask import Flask, render_template, request, jsonify # type: ignore
+from flask import Flask, render_template, request, jsonify, Response # type: ignore
 from flask_socketio import SocketIO
 import logging
 import time
 from pathlib import Path
+import os
+import io
+import zipfile
+import gzip
+import threading
+from werkzeug.utils import secure_filename
 
 from core import ConfigManager
 from core.hotspot_manager import HotspotManager
 from .api import api_bp
 from .socketio_handler import socketio
+# 업로드 디렉토리 준비
+UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'uploads')
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
 
 
 def create_app(config_manager: ConfigManager, factor_client=None):
@@ -112,6 +122,91 @@ def create_app(config_manager: ConfigManager, factor_client=None):
         except Exception as e:
             logger.error(f"상태 정보 조회 오류: {e}")
             return jsonify({'error': str(e)}), 500
+
+    # ===== UFP 업로드 & 인쇄 =====
+    def _is_allowed(filename: str) -> bool:
+        return os.path.splitext(filename.lower())[1] == '.ufp'
+
+    def _stream_ufp_gcode(printer_comm, ufp_path: str, wait_ok: bool = True, send_delay: float = 0.0) -> int:
+        """UFP(zip) 내부의 .gcode/.gcode.gz를 찾아 메모리 스트림으로 라인 단위 전송"""
+        sent = 0
+        with zipfile.ZipFile(ufp_path, 'r') as zf:
+            gcode_name = None
+            gz = False
+            for name in zf.namelist():
+                if name.lower().endswith('.gcode'):
+                    gcode_name = name; gz = False; break
+            if not gcode_name:
+                for name in zf.namelist():
+                    if name.lower().endswith('.gcode.gz'):
+                        gcode_name = name; gz = True; break
+            if not gcode_name:
+                raise FileNotFoundError('UFP 내부에 .gcode/.gcode.gz 를 찾을 수 없습니다.')
+
+            f = zf.open(gcode_name, 'r')
+            if gz:
+                stream = io.TextIOWrapper(gzip.GzipFile(fileobj=f), encoding='utf-8', errors='ignore')
+            else:
+                stream = io.TextIOWrapper(f, encoding='utf-8', errors='ignore')
+
+            for raw in stream:
+                line = raw.strip()
+                if not line or line.startswith(';'):
+                    continue
+                if ';' in line:
+                    line = line.split(';', 1)[0].strip()
+                    if not line:
+                        continue
+                ok = printer_comm.send_gcode(line, wait=True)
+                if not ok:
+                    app.logger.warning(f"G-code 전송 실패: {line}")
+                sent += 1
+                if send_delay > 0:
+                    import time as _t; _t.sleep(send_delay)
+        return sent
+
+    def _start_print_job(ufp_path: str):
+        try:
+            if not factor_client or not factor_client.is_connected():
+                app.logger.error('프린터 미연결 상태입니다.')
+                return
+            pc = factor_client.printer_comm
+            total = _stream_ufp_gcode(pc, ufp_path, wait_ok=True, send_delay=0.0)
+            app.logger.info(f'UFP 인쇄 전송 완료: {total} lines')
+        except Exception as e:
+            app.logger.error(f'UFP 인쇄 중 오류: {e}')
+
+    @app.route('/ufp', methods=['GET', 'POST'])
+    def upload_ufp():
+        if request.method == 'POST':
+            if 'file' not in request.files:
+                return Response('<p>파일 필드가 없습니다.</p><a href="/ufp">뒤로</a>', mimetype='text/html')
+            file = request.files['file']
+            if file.filename == '':
+                return Response('<p>파일이 선택되지 않았습니다.</p><a href="/ufp">뒤로</a>', mimetype='text/html')
+            if not _is_allowed(file.filename):
+                return Response('<p>허용되지 않은 파일 형식입니다(.ufp)</p><a href="/ufp">뒤로</a>', mimetype='text/html')
+
+            filename = secure_filename(file.filename)
+            save_path = os.path.join(UPLOAD_FOLDER, filename)
+            file.save(save_path)
+
+            t = threading.Thread(target=_start_print_job, args=(save_path,), daemon=True)
+            t.start()
+
+            return Response(f'''<h3>업로드 완료: {filename}</h3>
+                <p>인쇄 전송을 시작했습니다. 로그에서 진행 상황을 확인하세요.</p>
+                <pre>sudo journalctl -u factor-client.service -f</pre>
+                <a href="/dashboard">대시보드로 돌아가기</a>''', mimetype='text/html')
+
+        return Response('''<html><body style="font-family: sans-serif; margin: 24px;">
+            <h2>UFP 업로드 및 인쇄</h2>
+            <form action="/ufp" method="post" enctype="multipart/form-data">
+              <input type="file" name="file" accept=".ufp" />
+              <button type="submit">업로드 & 인쇄 시작</button>
+            </form>
+            <p><a href="/dashboard">대시보드로 돌아가기</a></p>
+            </body></html>''', mimetype='text/html')
     
     @app.route('/health')
     def health():
