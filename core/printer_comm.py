@@ -300,25 +300,36 @@ class PrinterCommunicator:
         
         while self.running and self.connected:
             try:
-                if self.serial_conn and self.serial_conn.in_waiting:
-                    raw = self.serial_conn.read(self.serial_conn.in_waiting)
-                    try:
-                        data = raw.decode('utf-8', errors='ignore')
-                    except Exception:
-                        data = ''
-                    # 원시 수신 로그 및 EOL 정규화
-                    self.logger.debug(f"[RX_RAW] {repr(data)}")
-                    buffer += data.replace('\r\n', '\n').replace('\r', '\n')
+                if self.serial_conn and self.serial_conn.is_open:
+                    # 1) 라인 단위 블로킹 읽기(타임아웃까지 대기)
+                    line_bytes = self.serial_conn.readline()  # timeout에 따라 반환
+                    if line_bytes:
+                        try:
+                            data = line_bytes.decode('utf-8', errors='ignore')
+                        except Exception:
+                            data = ''
+                        self.logger.debug(f"[RX_RAW] {repr(data)}")
+                        buffer += data.replace('\r\n', '\n').replace('\r', '\n')
                     
-                    # 줄 단위로 처리 (LF 기준)
+                    # 2) 버퍼에 라인이 있으면 처리
                     while '\n' in buffer:
                         line, buffer = buffer.split('\n', 1)
                         line = line.strip()
-                        
                         if line:
                             self.logger.debug(f"[RX_LINE] {line}")
                             self._process_response(line)
                             self.last_response_time = time.time()
+                    
+                    # 3) 남아있는 바이트가 많다면 추가로 비동기 드레인
+                    if self.serial_conn.in_waiting:
+                        extra = self.serial_conn.read(self.serial_conn.in_waiting)
+                        try:
+                            extra_s = extra.decode('utf-8', errors='ignore')
+                        except Exception:
+                            extra_s = ''
+                        if extra_s:
+                            self.logger.debug(f"[RX_RAW] {repr(extra_s)}")
+                            buffer += extra_s.replace('\r\n', '\n').replace('\r', '\n')
                 
                 time.sleep(0.01)  # CPU 사용률 조절
                 
