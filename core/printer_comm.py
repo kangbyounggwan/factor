@@ -614,6 +614,28 @@ class PrinterCommunicator:
                 return None
             finally:
                 self.sync_mode = False
+
+    def send_gcode(self, command: str, wait: bool = False, timeout: float = 8.0) -> bool:
+        """G-code 전송 유틸리티.
+        - wait=False: 즉시 LF로 전송 후 True 반환(에러 시 False)
+        - wait=True: send_command_and_wait로 동기 응답 확인 후 True/False
+        """
+        if not self.connected or not (self.serial_conn and self.serial_conn.is_open):
+            self.logger.warning("프린터가 연결되지 않음")
+            return False
+
+        if wait:
+            return self.send_command_and_wait(command, timeout=timeout) is not None
+
+        try:
+            with self.serial_lock:
+                self.serial_conn.write(f"{command}\n".encode("utf-8"))
+                self.serial_conn.flush()
+                self.logger.debug(f"[SYNC_TX] {command!r}")
+            return True
+        except Exception as e:
+            self.logger.error(f"G-code 전송 실패: {e}")
+            return False
     
 
     
