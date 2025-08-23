@@ -13,6 +13,7 @@ import io
 import zipfile
 import gzip
 import threading
+import re
 from werkzeug.utils import secure_filename
 
 from core import ConfigManager
@@ -48,8 +49,15 @@ def create_app(config_manager: ConfigManager, factor_client=None):
     app.factor_client = factor_client
     app.config_manager = config_manager
     
-    # 핫스팟 관리자 초기화
+    # 진행률/핫스팟 관리자 초기화
     app.hotspot_manager = HotspotManager(config_manager)
+    app.config.setdefault('PRINT_PROGRESS', {
+        'completion': 0.0,
+        'time_elapsed': 0,
+        'time_left': 0,
+        'layers': {'current': 0, 'total': 0},
+        'timestamp': time.time()
+    })
     
     # 정적 파일 경로 설정
     static_folder = Path(__file__).parent / 'static'
@@ -105,6 +113,13 @@ def create_app(config_manager: ConfigManager, factor_client=None):
                     'connected': True,
                     'timestamp': factor_client.last_heartbeat
                 }
+                # 스트리머가 기록한 진행률 병합(간이 진행률)
+                try:
+                    pp = app.config.get('PRINT_PROGRESS')
+                    if pp:
+                        status_data['progress'].update(pp)
+                except Exception:
+                    pass
             else:
                 # 프린터가 연결되지 않은 경우 기본 상태 반환
                 status_data = {
@@ -127,6 +142,30 @@ def create_app(config_manager: ConfigManager, factor_client=None):
     def _is_allowed(filename: str) -> bool:
         return os.path.splitext(filename.lower())[1] == '.ufp'
 
+    def _count_effective_lines(zf: zipfile.ZipFile, gcode_name: str, gz: bool) -> int:
+        cnt = 0
+        f = zf.open(gcode_name, 'r')
+        stream = io.TextIOWrapper(gzip.GzipFile(fileobj=f), encoding='utf-8', errors='ignore') if gz else io.TextIOWrapper(f, encoding='utf-8', errors='ignore')
+        for raw in stream:
+            line = raw.strip()
+            if not line or line.startswith(';'):
+                continue
+            if ';' in line:
+                line = line.split(';', 1)[0].strip()
+                if not line:
+                    continue
+            cnt += 1
+        return cnt
+
+    def _should_wait(line: str, sent_idx: int) -> bool:
+        # 블로킹이 필요한 명령 위주 + 주기적으로 한 번 대기
+        if re.match(r"^(M109|M190|M400|G4|G28|G29|M112)\b", line, re.IGNORECASE):
+            return True
+        # 25줄마다 한 번은 ok 대기 (버퍼 보호)
+        if sent_idx > 0 and (sent_idx % 25 == 0):
+            return True
+        return False
+
     def _stream_ufp_gcode(printer_comm, ufp_path: str, wait_ok: bool = True, send_delay: float = 0.0) -> int:
         """UFP(zip) 내부의 .gcode/.gcode.gz를 찾아 메모리 스트림으로 라인 단위 전송"""
         sent = 0
@@ -143,11 +182,26 @@ def create_app(config_manager: ConfigManager, factor_client=None):
             if not gcode_name:
                 raise FileNotFoundError('UFP 내부에 .gcode/.gcode.gz 를 찾을 수 없습니다.')
 
+            # 총 라인 수 계산(진행률 표시용)
+            try:
+                total = _count_effective_lines(zf, gcode_name, gz)
+            except Exception:
+                total = 0
+
             f = zf.open(gcode_name, 'r')
-            if gz:
-                stream = io.TextIOWrapper(gzip.GzipFile(fileobj=f), encoding='utf-8', errors='ignore')
-            else:
-                stream = io.TextIOWrapper(f, encoding='utf-8', errors='ignore')
+            stream = io.TextIOWrapper(gzip.GzipFile(fileobj=f), encoding='utf-8', errors='ignore') if gz else io.TextIOWrapper(f, encoding='utf-8', errors='ignore')
+
+            # 폴링 간섭 최소화: 인쇄 동안 폴링 간격 임시 완화
+            prev_temp = None; prev_pos = None
+            try:
+                if hasattr(app.factor_client, 'temp_poll_interval'):
+                    prev_temp = app.factor_client.temp_poll_interval
+                    app.factor_client.temp_poll_interval = max(prev_temp, 30.0)
+                if hasattr(app.factor_client, 'position_poll_interval'):
+                    prev_pos = app.factor_client.position_poll_interval
+                    app.factor_client.position_poll_interval = max(prev_pos, 30.0)
+            except Exception:
+                pass
 
             for raw in stream:
                 line = raw.strip()
@@ -157,12 +211,73 @@ def create_app(config_manager: ConfigManager, factor_client=None):
                     line = line.split(';', 1)[0].strip()
                     if not line:
                         continue
-                ok = printer_comm.send_gcode(line, wait=True)
+                # 로그: 너무 잦은 I/O 방지 위해 50줄마다 또는 M73만 기록
+                if sent % 50 == 0 or line.upper().startswith('M73'):
+                    try:
+                        logging.getLogger('factor-firmware').info(f"[PRINT] {line}")
+                    except Exception:
+                        app.logger.info(f"[PRINT] {line}")
+
+                # 전송: 중요 명령/주기적 구간만 ok 대기
+                must_wait = _should_wait(line, sent)
+                ok = printer_comm.send_gcode(line, wait=(wait_ok or must_wait))
                 if not ok:
-                    app.logger.warning(f"G-code 전송 실패: {line}")
+                    try:
+                        logging.getLogger('factor-firmware').warning(f"[PRINT] 전송 실패: {line}")
+                    except Exception:
+                        app.logger.warning(f"[PRINT] 전송 실패: {line}")
                 sent += 1
+                # 진행률 갱신
+                try:
+                    # 우선 순위 1) M73 사용
+                    m = re.match(r"\s*M73\s+(.*)", line, re.IGNORECASE)
+                    if m:
+                        params = m.group(1)
+                        p = re.search(r"P\s*(\d+(?:\.\d+)?)", params, re.IGNORECASE)
+                        r = re.search(r"R\s*(\d+)", params, re.IGNORECASE)
+                        completion = float(p.group(1)) if p else None
+                        time_left = int(r.group(1)) * 60 if r else None
+                        if completion is not None or time_left is not None:
+                            current = app.config['PRINT_PROGRESS'].get('layers', {}).get('current', sent)
+                            app.config['PRINT_PROGRESS'] = {
+                                'completion': round(completion if completion is not None else 0.0, 1),
+                                'time_elapsed': app.config['PRINT_PROGRESS'].get('time_elapsed', 0),
+                                'time_left': time_left if time_left is not None else app.config['PRINT_PROGRESS'].get('time_left', 0),
+                                'layers': {'current': current, 'total': total},
+                                'timestamp': time.time()
+                            }
+                        else:
+                            # M73가 있지만 파라미터가 없으면 라인 기반으로 보완
+                            completion = (sent / total * 100.0) if total > 0 else 0.0
+                            app.config['PRINT_PROGRESS'] = {
+                                'completion': round(completion, 1),
+                                'time_elapsed': app.config['PRINT_PROGRESS'].get('time_elapsed', 0),
+                                'time_left': app.config['PRINT_PROGRESS'].get('time_left', 0),
+                                'layers': {'current': sent, 'total': total},
+                                'timestamp': time.time()
+                            }
+                    else:
+                        # 우선 순위 2) 라인 기반 진행률
+                        completion = (sent / total * 100.0) if total > 0 else 0.0
+                        app.config['PRINT_PROGRESS'] = {
+                            'completion': round(completion, 1),
+                            'time_elapsed': app.config['PRINT_PROGRESS'].get('time_elapsed', 0),
+                            'time_left': app.config['PRINT_PROGRESS'].get('time_left', 0),
+                            'layers': {'current': sent, 'total': total},
+                            'timestamp': time.time()
+                        }
+                except Exception:
+                    pass
                 if send_delay > 0:
                     import time as _t; _t.sleep(send_delay)
+            # 폴링 간격 복원
+            try:
+                if prev_temp is not None:
+                    app.factor_client.temp_poll_interval = prev_temp
+                if prev_pos is not None:
+                    app.factor_client.position_poll_interval = prev_pos
+            except Exception:
+                pass
         return sent
 
     def _start_print_job(ufp_path: str):

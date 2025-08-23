@@ -587,6 +587,11 @@ class PrinterCommunicator:
                         line = line_bytes.decode("utf-8", errors="ignore").strip()
                         if line:
                             self.logger.debug(f"[SYNC_RX] {line}")
+                            # 수신 라인을 표준 처리 경로로 전달하여 콜백/하트비트 갱신
+                            try:
+                                self._process_response(line)
+                            except Exception:
+                                pass
                             # 의미있는 응답이면 즉시 반환
                             if command == "M105" and ("T:" in line or line.lower().startswith("ok")):
                                 return line
@@ -605,6 +610,10 @@ class PrinterCommunicator:
                                 p = part.strip()
                                 if p:
                                     self.logger.debug(f"[SYNC_RX] {p}")
+                                    try:
+                                        self._process_response(p)
+                                    except Exception:
+                                        pass
                                     if command == "M105" and ("T:" in p or p.lower().startswith("ok")):
                                         return p
                                     if command == "M114" and ("X:" in p or p.lower().startswith("ok")):

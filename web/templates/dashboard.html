@@ -431,6 +431,16 @@
                     <button class="btn" onclick="homeAll()">모든 축 홈</button>
                     <button class="btn" onclick="refreshStatus()">상태 새로고침</button>
                 </div>
+
+                <div class="control-panel">
+                    <h3>UFP 업로드 / 인쇄</h3>
+                    <div class="control-group">
+                        <label for="ufp-file">UFP 파일 선택 (.ufp)</label>
+                        <input type="file" id="ufp-file" accept=".ufp">
+                    </div>
+                    <button class="btn" onclick="uploadUfp()">업로드 & 인쇄 시작</button>
+                    <small style="color:#666;display:block;margin-top:8px;">진행 상황은 우측 시스템 로그에서 확인하세요.</small>
+                </div>
                 
                 <div class="log-section">
                     <h3>시스템 로그</h3>
@@ -453,8 +463,8 @@
             // 3초마다 상태 업데이트
             statusUpdateInterval = setInterval(loadStatus, 3000);
             
-            // 10초마다 로그 업데이트
-            setInterval(loadLogs, 10000);
+            // 2초마다 로그 업데이트 (진행 상황을 더 자주 표시)
+            setInterval(loadLogs, 2000);
         });
         
         // 페이지 언로드 시 인터벌 정리
@@ -534,13 +544,17 @@
             const bedTemp = document.getElementById('bed-temp');
             
             if (data.temperature_info) {
-                if (data.temperature_info.tool0) {
-                    const actual = data.temperature_info.tool0.actual || 0;
-                    const target = data.temperature_info.tool0.target || 0;
+                // tool 딕셔너리에서 첫 번째 툴 값을 사용
+                const toolDict = data.temperature_info.tool || data.temperature_info.tools || null;
+                if (toolDict && Object.keys(toolDict).length > 0) {
+                    const firstKey = Object.keys(toolDict)[0];
+                    const tool = toolDict[firstKey] || {};
+                    const actual = tool.actual || 0;
+                    const target = tool.target || 0;
                     nozzleTemp.textContent = `${actual}°C`;
                     nozzleTemp.title = `목표: ${target}°C`;
                 }
-                
+
                 if (data.temperature_info.bed) {
                     const actual = data.temperature_info.bed.actual || 0;
                     const target = data.temperature_info.bed.target || 0;
@@ -713,6 +727,40 @@
             
             // 스크롤을 맨 아래로
             container.scrollTop = container.scrollHeight;
+        }
+
+        // UFP 업로드/인쇄 시작
+        async function uploadUfp() {
+            const input = document.getElementById('ufp-file');
+            if (!input.files || input.files.length === 0) {
+                addLogEntry('UFP 파일을 선택하세요.', 'warning');
+                return;
+            }
+            const file = input.files[0];
+            if (!file.name.toLowerCase().endsWith('.ufp')) {
+                addLogEntry('확장자가 .ufp 인 파일만 업로드할 수 있습니다.', 'warning');
+                return;
+            }
+            const form = new FormData();
+            form.append('file', file);
+            try {
+                addLogEntry(`UFP 업로드 시작: ${file.name}`, 'info');
+                const res = await fetch('/ufp', { method: 'POST', body: form });
+                const text = await res.text();
+                if (res.ok) {
+                    addLogEntry('UFP 업로드 완료, 인쇄 전송을 시작했습니다.', 'info');
+                    // 업로드 응답 메시지를 로그에 일부 남김
+                    if (text) {
+                        addLogEntry(text.replace(/<[^>]*>/g,'').slice(0,200), 'info');
+                    }
+                    // 로그 패널을 더 자주 갱신
+                    loadLogs();
+                } else {
+                    addLogEntry('UFP 업로드 실패: ' + (text || res.statusText), 'error');
+                }
+            } catch (e) {
+                addLogEntry('UFP 업로드 오류: ' + e.message, 'error');
+            }
         }
     </script>
 </body>
