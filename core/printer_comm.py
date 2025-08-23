@@ -301,15 +301,22 @@ class PrinterCommunicator:
         while self.running and self.connected:
             try:
                 if self.serial_conn and self.serial_conn.in_waiting:
-                    data = self.serial_conn.read(self.serial_conn.in_waiting).decode('utf-8', errors='ignore')
-                    buffer += data
+                    raw = self.serial_conn.read(self.serial_conn.in_waiting)
+                    try:
+                        data = raw.decode('utf-8', errors='ignore')
+                    except Exception:
+                        data = ''
+                    # 원시 수신 로그 및 EOL 정규화
+                    self.logger.debug(f"[RX_RAW] {repr(data)}")
+                    buffer += data.replace('\r\n', '\n').replace('\r', '\n')
                     
-                    # 줄 단위로 처리
+                    # 줄 단위로 처리 (LF 기준)
                     while '\n' in buffer:
                         line, buffer = buffer.split('\n', 1)
                         line = line.strip()
                         
                         if line:
+                            self.logger.debug(f"[RX_LINE] {line}")
                             self._process_response(line)
                             self.last_response_time = time.time()
                 
@@ -330,12 +337,12 @@ class PrinterCommunicator:
                     continue
                 
                 if self.serial_conn and self.serial_conn.is_open:
-                    # 명령 전송
-                    command_line = f"{command}\n"
+                    # 명령 전송 (CRLF 사용)
+                    command_line = f"{command}\r\n"
                     self.serial_conn.write(command_line.encode('utf-8'))
                     self.serial_conn.flush()
                     
-                    self.logger.debug(f"명령 전송: {command}")
+                    self.logger.debug(f"[TX] {command!r}")
                 
                 self.command_queue.task_done()
                 
@@ -513,8 +520,13 @@ class PrinterCommunicator:
             return None
         
         try:
-            # last_response 초기화
+            # last_response 초기화 및 입력 버퍼 정리(노이즈 제거)
             self.last_response = None
+            try:
+                if self.serial_conn and self.serial_conn.is_open:
+                    self.serial_conn.reset_input_buffer()
+            except Exception:
+                pass
             
             # 명령 전송
             self.logger.debug(f"명령 전송 및 응답 대기: {command}")
