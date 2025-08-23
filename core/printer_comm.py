@@ -351,8 +351,8 @@ class PrinterCommunicator:
                     continue
                 
                 if self.serial_conn and self.serial_conn.is_open:
-                    # 명령 전송 (CRLF 사용)
-                    command_line = f"{command}\r\n"
+                    # 명령 전송 (LF 사용)
+                    command_line = f"{command}\n"
                     self.serial_conn.write(command_line.encode('utf-8'))
                     self.serial_conn.flush()
                     
