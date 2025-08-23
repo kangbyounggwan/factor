@@ -74,6 +74,9 @@ class PrinterCommunicator:
         self.current_position = Position(0, 0, 0, 0)
         self.printer_info = {}
         self.sd_card_info = {}
+        # 최근 관심 응답 라인 스냅샷 (동기 대기용)
+        self._last_temp_line = None
+        self._last_pos_line = None
         
         # 콜백
         self.callbacks = {
@@ -377,6 +380,7 @@ class PrinterCommunicator:
             temp_info = self.printer_handler.parse_temperature(line)
             if temp_info:
                 self._trigger_callback('on_temperature_update', temp_info)
+                self._last_temp_line = line
                 return
             
             # 위치 정보 파싱
@@ -384,13 +388,16 @@ class PrinterCommunicator:
             if position:
                 self.current_position = position
                 self._trigger_callback('on_position_update', position)
+                self._last_pos_line = line
                 return
         else:
             # 기본 파싱 방식
             if self._parse_temperature(line):
+                self._last_temp_line = line
                 return
             
             if self._parse_position(line):
+                self._last_pos_line = line
                 return
         
         # 펌웨어 정보 파싱
@@ -524,7 +531,7 @@ class PrinterCommunicator:
         for cmd in temp_commands:
             self.command_queue.put(cmd)
     
-    def send_command_and_wait(self, command: str, timeout: float = 5.0) -> Optional[str]:
+    def send_command_and_wait(self, command: str, timeout: float = 8.0) -> Optional[str]:
         """G-code 명령 전송 후 응답 대기"""
         if not self.connected:
             self.logger.warning("프린터가 연결되지 않음")
@@ -533,6 +540,10 @@ class PrinterCommunicator:
         try:
             # last_response 초기화 및 입력 버퍼 정리(노이즈 제거)
             self.last_response = None
+            if command == "M105":
+                self._last_temp_line = None
+            elif command == "M114":
+                self._last_pos_line = None
             try:
                 if self.serial_conn and self.serial_conn.is_open:
                     self.serial_conn.reset_input_buffer()
@@ -546,10 +557,22 @@ class PrinterCommunicator:
             # 응답 대기
             start_time = time.time()
             while time.time() - start_time < timeout:
+                # 명령별로 의미있는 라인이 들어왔는지 우선 확인
+                if command == "M105" and self._last_temp_line:
+                    response = self._last_temp_line
+                    self._last_temp_line = None
+                    self.logger.debug(f"응답 수신(M105): {response}")
+                    return response
+                if command == "M114" and self._last_pos_line:
+                    response = self._last_pos_line
+                    self._last_pos_line = None
+                    self.logger.debug(f"응답 수신(M114): {response}")
+                    return response
+                # fallback: 마지막 라인 전체
                 if self.last_response:
                     response = self.last_response
-                    self.logger.debug(f"응답 수신: {response}")
-                    self.last_response = None  # 응답 사용 후 초기화
+                    self.logger.debug(f"응답 수신(FALLBACK): {response}")
+                    self.last_response = None
                     return response
                 time.sleep(0.1)  # 100ms 대기
             
