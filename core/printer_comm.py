@@ -68,6 +68,9 @@ class PrinterCommunicator:
         self.response_queue = Queue()
         self.send_buffer = []
         self.line_number = 1
+        # 동기 전송/수신 보호
+        self.serial_lock = threading.Lock()
+        self.sync_mode = False  # True일 때 read worker는 일시 대기
         
         # 데이터 파싱
         self.current_temps = {}
@@ -303,6 +306,9 @@ class PrinterCommunicator:
         
         while self.running and self.connected:
             try:
+                if self.sync_mode:
+                    time.sleep(0.01)
+                    continue
                 if self.serial_conn and self.serial_conn.is_open:
                     # 1) 라인 단위 블로킹 읽기(타임아웃까지 대기)
                     line_bytes = self.serial_conn.readline()  # timeout에 따라 반환
@@ -532,56 +538,67 @@ class PrinterCommunicator:
             self.command_queue.put(cmd)
     
     def send_command_and_wait(self, command: str, timeout: float = 8.0) -> Optional[str]:
-        """G-code 명령 전송 후 응답 대기"""
-        if not self.connected:
+        """동기식으로 바로 전송하고 같은 함수에서 읽어서 반환"""
+        if not self.connected or not (self.serial_conn and self.serial_conn.is_open):
             self.logger.warning("프린터가 연결되지 않음")
             return None
-        
-        try:
-            # last_response 초기화 및 입력 버퍼 정리(노이즈 제거)
-            self.last_response = None
-            if command == "M105":
-                self._last_temp_line = None
-            elif command == "M114":
-                self._last_pos_line = None
+
+        with self.serial_lock:
+            self.sync_mode = True
             try:
-                if self.serial_conn and self.serial_conn.is_open:
-                    self.serial_conn.reset_input_buffer()
-            except Exception:
-                pass
-            
-            # 명령 전송
-            self.logger.debug(f"명령 전송 및 응답 대기: {command}")
-            self.send_command(command)
-            
-            # 응답 대기
-            start_time = time.time()
-            while time.time() - start_time < timeout:
-                # 명령별로 의미있는 라인이 들어왔는지 우선 확인
-                if command == "M105" and self._last_temp_line:
-                    response = self._last_temp_line
-                    self._last_temp_line = None
-                    self.logger.debug(f"응답 수신(M105): {response}")
-                    return response
-                if command == "M114" and self._last_pos_line:
-                    response = self._last_pos_line
-                    self._last_pos_line = None
-                    self.logger.debug(f"응답 수신(M114): {response}")
-                    return response
-                # fallback: 마지막 라인 전체
+                # 준비: 내부 상태 초기화(의미있는 라인 캐시)
+                self._last_temp_line = None
+                self._last_pos_line = None
+                self.last_response = None
+
+                # 전송(LF)
+                self.logger.debug(f"[SYNC_TX] {command!r}")
+                self.serial_conn.write(f"{command}\n".encode("utf-8"))
+                self.serial_conn.flush()
+
+                # 동기 수신: readline 반복 + 추가 드레인
+                end = time.time() + timeout
+                while time.time() < end:
+                    line_bytes = self.serial_conn.readline()
+                    if line_bytes:
+                        line = line_bytes.decode("utf-8", errors="ignore").strip()
+                        if line:
+                            self.logger.debug(f"[SYNC_RX] {line}")
+                            # 의미있는 응답이면 즉시 반환
+                            if command == "M105" and ("T:" in line or line.lower().startswith("ok")):
+                                return line
+                            if command == "M114" and ("X:" in line or line.lower().startswith("ok")):
+                                return line
+                            # 다른 라인이라도 마지막 응답으로 킵
+                            self.last_response = line
+                    else:
+                        if self.serial_conn.in_waiting:
+                            extra = self.serial_conn.read(self.serial_conn.in_waiting)
+                            try:
+                                extra_s = extra.decode("utf-8", errors="ignore")
+                            except Exception:
+                                extra_s = ""
+                            for part in extra_s.replace("\r\n","\n").replace("\r","\n").split("\n"):
+                                p = part.strip()
+                                if p:
+                                    self.logger.debug(f"[SYNC_RX] {p}")
+                                    if command == "M105" and ("T:" in p or p.lower().startswith("ok")):
+                                        return p
+                                    if command == "M114" and ("X:" in p or p.lower().startswith("ok")):
+                                        return p
+                                    self.last_response = p
+                        time.sleep(0.05)
+
+                # fallback: 마지막 응답이라도 반환
                 if self.last_response:
-                    response = self.last_response
-                    self.logger.debug(f"응답 수신(FALLBACK): {response}")
-                    self.last_response = None
-                    return response
-                time.sleep(0.1)  # 100ms 대기
-            
-            self.logger.warning(f"명령 '{command}' 응답 타임아웃 ({timeout}초)")
-            return None
-            
-        except Exception as e:
-            self.logger.error(f"명령 전송 및 응답 대기 실패: {e}")
-            return None
+                    return self.last_response
+                self.logger.warning(f"명령 '{command}' 응답 타임아웃 ({timeout}초)")
+                return None
+            except Exception as e:
+                self.logger.error(f"동기 전송/수신 실패: {e}")
+                return None
+            finally:
+                self.sync_mode = False
     
 
     
