@@ -399,14 +399,6 @@
                             <h4 style="margin-bottom:8px;">G-code 미리보기(처음 200줄)</h4>
                             <pre id="ufp-gcode-head" style="height:220px; overflow:auto; background:#1f2937; color:#e5e7eb; padding:12px; border-radius:8px;"></pre>
                         </div>
-                        <div style="flex:1; overflow:auto;">
-                            <h4 style="margin-bottom:8px;">G-code 미리보기(마지막 100줄)</h4>
-                            <pre id="ufp-gcode-tail" style="height:220px; overflow:auto; background:#1f2937; color:#e5e7eb; padding:12px; border-radius:8px;"></pre>
-                        </div>
-                        <div style="width:240px; text-align:center;">
-                            <h4 style="margin-bottom:8px;">썸네일</h4>
-                            <img id="ufp-thumb" alt="thumbnail" style="max-width:100%; border-radius:8px; background:#f0f0f0;" />
-                        </div>
                     </div>
                 </div>
                 
@@ -859,11 +851,7 @@
                 const data = await res.json();
                 if (res.ok && data.success) {
                     const head = (data.gcode_head || []).join('\n');
-                    const tail = (data.gcode_tail || []).join('\n');
                     document.getElementById('ufp-gcode-head').textContent = head || '미리보기 없음';
-                    document.getElementById('ufp-gcode-tail').textContent = tail || '미리보기 없음';
-                    const img = document.getElementById('ufp-thumb');
-                    img.src = data.thumbnail || '';
                 } else {
                     addLogEntry('UFP 프리뷰 실패: ' + (data.error || res.statusText), 'error');
                 }

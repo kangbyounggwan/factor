@@ -3,7 +3,7 @@ REST API 엔드포인트
 Factor 클라이언트 데이터 접근용 API
 """
 
-from flask import Blueprint, request, jsonify, current_app, Response, send_file # type: ignore
+from flask import Blueprint, request, jsonify, current_app, Response # type: ignore
 import logging
 import json
 import logging
@@ -389,16 +389,6 @@ def _find_gcode_in_ufp(zf: zipfile.ZipFile) -> (str, bool):
             return name, True
     return None, False
 
-def _read_thumbnail_from_ufp(zf: zipfile.ZipFile) -> bytes:
-    # 일반적으로 'Metadata/thumbnail.png' 또는 'thumbnail.png' 등
-    candidates = [
-        'Metadata/thumbnail.png', 'thumbnail.png', 'metadata/thumbnail.png'
-    ]
-    for c in candidates:
-        if c in zf.namelist():
-            return zf.read(c)
-    return b''
-
 @api_bp.route('/ufp/upload', methods=['POST'])
 def upload_ufp_only():
     """UFP 업로드만 수행(프린트 시작하지 않음) → 업로드 토큰 반환
@@ -431,14 +421,7 @@ def preview_ufp(token: str):
             gname, gz = _find_gcode_in_ufp(zf)
             if not gname:
                 return jsonify({'success': False, 'error': 'gcode not found in ufp'}), 400
-            # 썸네일
-            thumb = _read_thumbnail_from_ufp(zf)
-            thumb_b64 = None
-            if thumb:
-                import base64
-                thumb_b64 = 'data:image/png;base64,' + base64.b64encode(thumb).decode('ascii')
-
-            # G-code 일부만(예: 처음 100줄, 마지막 50줄)
+            # G-code 일부만(처음 일부 라인)
             f = zf.open(gname, 'r')
             stream = io.TextIOWrapper(gzip.GzipFile(fileobj=f), encoding='utf-8', errors='ignore') if gz else io.TextIOWrapper(f, encoding='utf-8', errors='ignore')
             head_lines = []
@@ -449,22 +432,11 @@ def preview_ufp(token: str):
                     break
                 head_lines.append(line.rstrip('\n'))
 
-            # 꼬리부분 추출을 위해 다시 연다
-            f2 = zf.open(gname, 'r')
-            stream2 = io.TextIOWrapper(gzip.GzipFile(fileobj=f2), encoding='utf-8', errors='ignore') if gz else io.TextIOWrapper(f2, encoding='utf-8', errors='ignore')
-            tail_buffer = []
-            for l in stream2:
-                tail_buffer.append(l.rstrip('\n'))
-                if len(tail_buffer) > 100:
-                    tail_buffer.pop(0)
-
             return jsonify({
                 'success': True,
                 'token': token,
                 'gcode_name': gname,
-                'gcode_head': head_lines,
-                'gcode_tail': tail_buffer,
-                'thumbnail': thumb_b64
+                'gcode_head': head_lines
             })
     except Exception as e:
         logger.error(f"UFP 프리뷰 오류: {e}")
