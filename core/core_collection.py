@@ -1,6 +1,8 @@
 import time
 import re
+from dataclasses import dataclass
 from typing import Optional, TYPE_CHECKING
+from .data_models import TemperatureData, TemperatureInfo, Position
 if TYPE_CHECKING:
     from .printer_comm import PrinterCommunicator
 
@@ -71,7 +73,16 @@ class DataCollectionModule:
         if pc.ok_pattern.match(line):
             pass
 
-        response = pc.GCodeResponse(
+        # 로컬 응답 객체(shim)로 콜백 전달 (순환참조 방지)
+        @dataclass
+        class GCodeResponseShim:
+            command: str
+            response: str
+            timestamp: float
+            success: bool
+            error_message: Optional[str] = None
+
+        response = GCodeResponseShim(
             command="",
             response=line,
             timestamp=time.time(),
@@ -95,15 +106,15 @@ class DataCollectionModule:
         tools = {}; bed = None; chamber = None
         if t_match:
             actual = float(t_match.group(1)); target = float(t_match.group(2))
-            tools["tool0"] = pc.TemperatureData(actual=actual, target=target)
+            tools["tool0"] = TemperatureData(actual=actual, target=target)
         if b_match:
             actual = float(b_match.group(1)); target = float(b_match.group(2))
-            bed = pc.TemperatureData(actual=actual, target=target)
+            bed = TemperatureData(actual=actual, target=target)
         if not tools and not bed:
             matches = pc.temp_pattern.findall(line)
             for sensor_type, sensor_num, actual, target in matches:
                 actual = float(actual); target = float(target)
-                td = pc.TemperatureData(actual=actual, target=target)
+                td = TemperatureData(actual=actual, target=target)
                 if sensor_type == 'T':
                     tool_name = f"tool{sensor_num}" if sensor_num else "tool0"
                     tools[tool_name] = td
@@ -112,7 +123,7 @@ class DataCollectionModule:
                 elif sensor_type == 'C':
                     chamber = td
         if tools or bed or chamber:
-            temp_info = pc.TemperatureInfo(tool=tools, bed=bed, chamber=chamber)
+            temp_info = TemperatureInfo(tool=tools, bed=bed, chamber=chamber)
             pc._last_temp_info = temp_info
             pc._trigger_callback('on_temperature_update', temp_info)
             return True
@@ -138,7 +149,7 @@ class DataCollectionModule:
         for axis, value in matches:
             position_data[axis.lower()] = float(value)
         if position_data:
-            pc.current_position = pc.Position(
+            pc.current_position = Position(
                 x=position_data.get('x', 0),
                 y=position_data.get('y', 0),
                 z=position_data.get('z', 0),
@@ -191,10 +202,10 @@ class DataCollectionModule:
                 self._parse_temperature_response(response)
                 if pc._last_temp_info:
                     return pc._last_temp_info
-            return pc.TemperatureInfo(tool={})
+            return TemperatureInfo(tool={})
         except Exception as e:
             pc.logger.error(f"온도 정보 수집 실패: {e}")
-            return pc.TemperatureInfo(tool={})
+            return TemperatureInfo(tool={})
 
     def _parse_temperature_response(self, response: str):
         """
