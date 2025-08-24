@@ -126,6 +126,17 @@ class DataCollectionModule:
             temp_info = TemperatureInfo(tool=tools, bed=bed, chamber=chamber)
             pc._last_temp_info = temp_info
             pc._trigger_callback('on_temperature_update', temp_info)
+            # 단계 추적에 온도 업데이트 전달
+            try:
+                tool0 = tools.get('tool0') if tools else None
+                pc.phase_tracker.on_temp(
+                    tool0.actual if tool0 else None,
+                    tool0.target if tool0 else None,
+                    bed.actual if bed else None,
+                    bed.target if bed else None,
+                )
+            except Exception:
+                pass
             return True
         return False
 

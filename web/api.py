@@ -195,6 +195,23 @@ def reconnect_printer():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@api_bp.route('/printer/cancel', methods=['POST'])
+def cancel_print():
+    """인쇄 취소: 큐 비우기 → 파킹 이동 → 쿨다운"""
+    try:
+        fc = current_app.factor_client
+        if not fc or not hasattr(fc, 'printer_comm'):
+            return jsonify({'success': False, 'error': 'Factor client not available'}), 503
+        pc = fc.printer_comm
+        if hasattr(pc, 'control') and pc.control:
+            ok = pc.control.cancel_print()
+            return jsonify({'success': bool(ok)}) if ok else (jsonify({'success': False}), 500)
+        return jsonify({'success': False, 'error': 'control not available'}), 500
+    except Exception as e:
+        logger.error(f"취소 처리 오류: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @api_bp.route('/config', methods=['GET'])
 def get_config():
     """현재 설정 반환"""
@@ -366,13 +383,42 @@ def get_tx_window():
         if not factor_client or not hasattr(factor_client, 'printer_comm'):
             return jsonify({'window_size': 0, 'inflight': [], 'pending_next': []})
         pc = factor_client.printer_comm
-        if hasattr(pc, 'control') and pc.control:
+        # 1) Async TX 브리지 사용 시 정식 스냅샷
+        if hasattr(pc, 'control') and pc.control and getattr(pc, 'tx_bridge', None):
             snap = pc.control.get_tx_window_snapshot()
             return jsonify(snap)
-        return jsonify({'window_size': 0, 'inflight': [], 'pending_next': []})
+        # 2) Fallback: 동기 경로일 때, 내부 command_queue를 이용해 대기열만 노출
+        pending = []
+        try:
+            q = getattr(pc, 'command_queue', None)
+            if q is not None and hasattr(q, 'queue'):
+                # thread-safe가 아니므로 읽기만 수행
+                items = list(q.queue)  # type: ignore[attr-defined]
+                for i, line in enumerate(items[:15]):
+                    pending.append({'id': i + 1, 'line': str(line)})
+        except Exception:
+            pass
+        return jsonify({'window_size': getattr(pc, 'window_size', 15), 'inflight': [], 'pending_next': pending})
     except Exception as e:
         logger.error(f"송신 윈도우 조회 오류: {e}")
         return jsonify({'window_size': 0, 'inflight': [], 'pending_next': []})
+
+
+@api_bp.route('/printer/phase', methods=['GET'])
+def get_printer_phase():
+    """현재 프린트 단계(Phase) 스냅샷 반환"""
+    try:
+        fc = current_app.factor_client
+        if not fc or not hasattr(fc, 'printer_comm'):
+            return jsonify({'phase': 'unknown', 'since': 0})
+        pc = fc.printer_comm
+        if hasattr(pc, 'control') and pc.control:
+            snap = pc.control.get_phase_snapshot()
+            return jsonify(snap)
+        return jsonify({'phase': 'unknown', 'since': 0})
+    except Exception as e:
+        logger.error(f"프린트 단계 조회 오류: {e}")
+        return jsonify({'phase': 'unknown', 'since': 0})
 
 
 # ===== UFP 업로드 프리뷰(자동 인쇄 금지) =====

@@ -1,6 +1,7 @@
 import re
 import time
 import threading
+from enum import Enum
 from typing import Optional, Callable, TYPE_CHECKING
 if TYPE_CHECKING:
     from .printer_comm import PrinterCommunicator
@@ -35,6 +36,11 @@ class ControlModule:
 
     def __init__(self, pc: "PrinterCommunicator"):
         self.pc = pc
+        # 단계 추적기 초기화
+        try:
+            self.pc.phase_tracker = _PhaseTracker()
+        except Exception:
+            self.pc.phase_tracker = None
 
     # ===== 연결/해제 =====
     def connect(self, port: Optional[str] = None, baudrate: Optional[int] = None) -> bool:
@@ -398,6 +404,16 @@ class ControlModule:
                                     self._inflight_order.remove(_id)
                                 except ValueError:
                                     pass
+                        # 단계 추적: OK 수신
+                        try:
+                            tracker = getattr(self, '_tracker_ref', None) or getattr(self, 'tracker_ref', None)
+                            if tracker is None:
+                                tracker = getattr(self_parent(), 'phase_tracker', None)  # may raise
+                            ok_line = evt.get('line', '')
+                            if tracker:
+                                tracker.on_ack(ok_line)
+                        except Exception:
+                            pass
                     elif t == 'rx':
                         try:
                             on_rx(evt.get('line', ''))
@@ -423,6 +439,15 @@ class ControlModule:
                                     line = evt.get('line', '')
                                 self._inflight_map[_id] = line
                                 self._inflight_order.append(_id)
+                        # 단계 추적: 전송 라인
+                        try:
+                            tracker = getattr(self, '_tracker_ref', None) or getattr(self, 'tracker_ref', None)
+                            if tracker is None:
+                                tracker = getattr(self_parent(), 'phase_tracker', None)
+                            if tracker:
+                                tracker.on_tx(evt.get('line', ''))
+                        except Exception:
+                            pass
 
             def snapshot(self, window_size: int):
                 """현재 전송 윈도우 상태 스냅샷 반환"""
@@ -437,6 +462,19 @@ class ControlModule:
                         for _id in pending_ids
                     ]
                 return {'inflight': inflight, 'pending_next': pending}
+
+            def purge(self):
+                """대기 중인 전송을 모두 폐기(인플라이트는 유지될 수 있음)"""
+                # in_q 비우기
+                try:
+                    while True:
+                        self.in_q.get_nowait()
+                except Exception:
+                    pass
+                # 보류 큐 초기화
+                with self._lock:
+                    self._pending_map.clear()
+                    self._pending_order.clear()
 
         def _on_rx(line: str):
             if line:
@@ -464,6 +502,137 @@ class ControlModule:
         snap = pc.tx_bridge.snapshot(pc.window_size)
         snap['window_size'] = pc.window_size
         return snap
+
+    def get_phase_snapshot(self):
+        pc = self.pc
+        tracker = getattr(pc, 'phase_tracker', None)
+        if not tracker:
+            return {'phase': 'unknown', 'since': 0}
+        return tracker.snapshot()
+
+    def cancel_print(self):
+        """인쇄 취소: 대기 큐 폐기 → 파킹 이동 → 쿨다운"""
+        pc = self.pc
+        try:
+            # 대기열 비우기
+            if pc.tx_bridge and hasattr(pc.tx_bridge, 'purge'):
+                pc.tx_bridge.purge()
+            else:
+                # 동기 경로: 내부 큐 비우기
+                try:
+                    while True:
+                        pc.command_queue.get_nowait()
+                except Exception:
+                    pass
+
+            # 안전 파킹 및 쿨다운 시퀀스
+            safe_cmds = [
+                'G91',            # 상대좌표
+                'G1 Z10 F600',    # 노즐 올리기
+                'G90',            # 절대좌표 복귀
+                'G1 X0 Y200 F6000',
+                'M104 S0',        # 노즐 끄기
+                'M140 S0',        # 베드 끄기
+                'M106 S0'         # 팬 끄기
+            ]
+            for cmd in safe_cmds:
+                # 배리어로 간주하여 순차 실행을 보장
+                self.send_gcode(cmd, wait=False)
+
+            # 상태 플래그 갱신(선택)
+            try:
+                pc._set_state(pc.state.__class__.CANCELLING)
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return False
+
+
+# ====== 단계 추적기 구현 ======
+class _PrintPhase(Enum):
+    INITIALIZING = "initializing"
+    HOMING = "homing"
+    HEATING = "heating"
+    LEVELING = "leveling"
+    PRIMING = "priming"
+    FIRST_LAYER = "first_layer"
+    PRINTING = "printing"
+
+
+class _PhaseTracker:
+    G28_RE = re.compile(r"^\s*G28\b", re.I)
+    G29_RE = re.compile(r"^\s*G29\b", re.I)
+    HEAT_RE = re.compile(r"^\s*M10(?:4|9)\b|^\s*M19(?:0|4)\b", re.I)  # M104/M109/M190/M140
+    PRIME_HINT = re.compile(r"prime|purge", re.I)
+    MOVE_EXTRUDE_RE = re.compile(r"^\s*G1\b.*\bE(-?\d+\.?\d*)", re.I)
+    Z_RE = re.compile(r"\bZ(-?\d+\.?\d*)", re.I)
+
+    def __init__(self, first_layer_height: float = 0.2):
+        self.phase = _PrintPhase.INITIALIZING
+        self.first_layer_height = first_layer_height
+        self._heating_pending = False
+        self.last_tx = None
+        self.last_change = time.time()
+
+    def on_tx(self, line: str):
+        self.last_tx = line or ''
+        if self.G28_RE.search(line):
+            self._set(_PrintPhase.HOMING)
+            return
+        if self.G29_RE.search(line):
+            self._set(_PrintPhase.LEVELING)
+            return
+        if self.HEAT_RE.search(line):
+            self._heating_pending = True
+            self._set(_PrintPhase.HEATING)
+            return
+        if self.PRIME_HINT.search(line):
+            self._set(_PrintPhase.PRIMING)
+            return
+        if self._looks_first_layer(line):
+            self._set(_PrintPhase.FIRST_LAYER)
+            return
+        if self.MOVE_EXTRUDE_RE.search(line):
+            if self.phase not in (_PrintPhase.FIRST_LAYER, _PrintPhase.PRINTING):
+                self._set(_PrintPhase.PRINTING)
+
+    def on_ack(self, ok_line: str):
+        if self._heating_pending and ok_line.lower().startswith('ok'):
+            # 최종 판정은 on_temp에서, 여기서는 pending만 클리어 가능
+            self._heating_pending = False
+
+    def on_temp(self, tool_actual: Optional[float], tool_target: Optional[float], bed_actual: Optional[float], bed_target: Optional[float]):
+        try:
+            # Heating 단계일 때 목표 근접 시 다음 단계로 이동 준비
+            if self.phase == _PrintPhase.HEATING:
+                close = lambda a, t: (a is not None and t is not None and abs(float(a) - float(t)) <= 1.0 and float(t) > 0)
+                if close(tool_actual, tool_target) or close(bed_actual, bed_target):
+                    # 다음 전송 라인에서 자연스럽게 다른 단계로 넘어감
+                    pass
+        except Exception:
+            pass
+
+    def _looks_first_layer(self, line: str) -> bool:
+        mE = self.MOVE_EXTRUDE_RE.search(line or '')
+        if not mE:
+            return False
+        mZ = self.Z_RE.search(line or '')
+        if not mZ:
+            return False
+        try:
+            z = float(mZ.group(1))
+            return 0 <= z <= (self.first_layer_height + 0.05)
+        except Exception:
+            return False
+
+    def _set(self, p: _PrintPhase):
+        if p != self.phase:
+            self.phase = p
+            self.last_change = time.time()
+
+    def snapshot(self):
+        return {"phase": self.phase.value, "since": self.last_change}
 
     @staticmethod
     async def _tx_run(port: str, baudrate: int, window_size: int, in_q: 'mp.Queue', out_q: 'mp.Queue'):

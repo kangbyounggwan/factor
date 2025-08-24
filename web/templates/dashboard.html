@@ -301,6 +301,21 @@
             gap: 10px;
             margin-bottom: 20px;
         }
+        .phase-status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+        .phase-badge {
+            display: inline-block;
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: #edf2ff;
+            color: #3b5bdb;
+            font-weight: 700;
+            font-size: 12px;
+        }
         
         .status-indicator {
             width: 12px;
@@ -364,6 +379,10 @@
                 <div class="connection-status">
                     <div class="status-indicator" id="connection-indicator"></div>
                     <span id="connection-text">3D 프린터 서버 연결 상태 확인 중...</span>
+                </div>
+                <div class="phase-status">
+                    <span class="phase-badge" id="phase-badge">단계 확인 중...</span>
+                    <span id="phase-brief" style="color:#555; font-size:14px;">—</span>
                 </div>
                 
                 <div class="status-cards">
@@ -441,6 +460,7 @@
                     <button class="btn" onclick="setTemperature()">온도 설정</button>
                     <button class="btn btn-warning" onclick="emergencyStop()">비상 정지</button>
                     <button class="btn" onclick="homeAll()">모든 축 홈</button>
+                    <button class="btn btn-danger" onclick="cancelPrint()">인쇄 취소</button>
                     <button class="btn" onclick="refreshStatus()">상태 새로고침</button>
                 </div>
 
@@ -467,7 +487,9 @@
 
     <script>
         let statusUpdateInterval;
+        let phaseUpdateInterval;
         let lastLogLine = null; // 최근에 표시한 마지막 로그 라인(중복 방지)
+        let currentStatus = null; // 최근 상태 캐시(온도/진행률 브리핑용)
         
         // 페이지 로드 시 초기화
         document.addEventListener('DOMContentLoaded', function() {
@@ -477,6 +499,7 @@
             
             // 3초마다 상태 업데이트
             statusUpdateInterval = setInterval(loadStatus, 3000);
+            phaseUpdateInterval = setInterval(loadPhase, 1000);
             setInterval(loadTxWindow, 1000);
             
             // 2초마다 로그 업데이트 (진행 상황을 더 자주 표시)
@@ -566,6 +589,7 @@
         
         // 대시보드 업데이트
         function updateDashboard(data) {
+            currentStatus = data;
             // 연결 상태
             const indicator = document.getElementById('connection-indicator');
             const connectionText = document.getElementById('connection-text');
@@ -635,6 +659,67 @@
                     const total = data.progress.layers.total || 0;
                     progressLayers.textContent = `레이어: ${current} / ${total}`;
                 }
+            }
+        }
+
+        // 단계(Phase) 폴링/표시
+        async function loadPhase() {
+            try {
+                const res = await fetch('/api/printer/phase');
+                const data = await res.json();
+                updatePhaseUI(data);
+            } catch (e) {
+                // ignore
+            }
+        }
+
+        function updatePhaseUI(phaseData) {
+            const badge = document.getElementById('phase-badge');
+            const brief = document.getElementById('phase-brief');
+            const p = (phaseData && phaseData.phase) ? phaseData.phase : 'unknown';
+            const since = phaseData && phaseData.since ? phaseData.since : 0;
+            badge.textContent = `현재 단계: ${mapPhaseLabel(p)}`;
+
+            // 브리핑: 단계별 상세(온도/시간/힌트)
+            let msg = '';
+            if (p === 'heating' && currentStatus && currentStatus.temperature_info) {
+                const ti = currentStatus.temperature_info;
+                const toolDict = ti.tool || {};
+                const t0 = toolDict['tool0'] || {};
+                const hn = (t0.actual ?? 0).toFixed(1) + ' / ' + (t0.target ?? 0);
+                const hb = ti.bed ? ((ti.bed.actual ?? 0).toFixed(1) + ' / ' + (ti.bed.target ?? 0)) : '—';
+                msg = `가열 중… 노즐 ${hn}°C, 베드 ${hb}°C`;
+            } else if (p === 'homing') {
+                msg = '축 원점 복귀 중(G28)…';
+            } else if (p === 'leveling') {
+                msg = '베드 레벨링(G29)…';
+            } else if (p === 'priming') {
+                msg = '필라멘트 프라임/퍼지 라인 준비…';
+            } else if (p === 'first_layer') {
+                msg = '첫 레이어 출력 중(접착 상태 주의)…';
+            } else if (p === 'printing') {
+                if (currentStatus && currentStatus.progress) {
+                    const c = (currentStatus.progress.completion || 0).toFixed(1);
+                    msg = `인쇄 중… 진행률 ${c}%`;
+                } else {
+                    msg = '인쇄 중…';
+                }
+            } else {
+                msg = '초기화/대기 중…';
+            }
+            brief.textContent = msg;
+        }
+
+        function mapPhaseLabel(p) {
+            switch (p) {
+                case 'homing': return 'Homing';
+                case 'heating': return 'Heating';
+                case 'leveling': return 'Leveling';
+                case 'priming': return 'Priming';
+                case 'first_layer': return 'First Layer';
+                case 'printing': return 'Printing';
+                case 'initializing': return 'Initializing';
+                default: return 'Unknown';
             }
         }
         
@@ -746,6 +831,23 @@
                 } catch (error) {
                     addLogEntry('비상 정지 실패: ' + error.message, 'error');
                 }
+            }
+        }
+
+        // 인쇄 취소
+        async function cancelPrint() {
+            if (!confirm('진행 중인 인쇄를 취소하고 파킹/쿨다운 하시겠습니까?')) return;
+            try {
+                const res = await fetch('/api/printer/cancel', { method: 'POST' });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    addLogEntry('인쇄 취소: 큐 정리 및 파킹/쿨다운 명령 전송', 'warning');
+                    loadStatus();
+                } else {
+                    addLogEntry('인쇄 취소 실패', 'error');
+                }
+            } catch (e) {
+                addLogEntry('인쇄 취소 오류: ' + e.message, 'error');
             }
         }
         
