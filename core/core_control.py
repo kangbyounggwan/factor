@@ -345,12 +345,22 @@ class ControlModule:
                 self._acks = {}
                 self._lock = threading.Lock()
                 self._running = True
+                # 전송 윈도우 상태(부모 프로세스 미러)
+                self._pending_map = {}
+                self._pending_order = collections.deque()
+                self._inflight_map = {}
+                self._inflight_order = collections.deque()
                 self._collector = threading.Thread(target=self._collect, args=(on_rx, on_error), daemon=True)
                 self._collector.start()
 
             def enqueue(self, line: str, barrier: bool = False) -> int:
                 self._seq += 1
-                self.in_q.put({'id': self._seq, 'line': line, 'barrier': barrier, 'ts': time.time()})
+                msg = {'id': self._seq, 'line': line, 'barrier': barrier, 'ts': time.time()}
+                # 보류 큐에 등록
+                with self._lock:
+                    self._pending_map[self._seq] = line
+                    self._pending_order.append(self._seq)
+                self.in_q.put(msg)
                 return self._seq
 
             def wait_ack(self, msg_id: int, timeout: float = 8.0) -> bool:
@@ -380,6 +390,14 @@ class ControlModule:
                     if t == 'ack':
                         with self._lock:
                             self._acks[evt['id']] = evt
+                            # inflight 제거
+                            _id = evt['id']
+                            if _id in self._inflight_map:
+                                self._inflight_map.pop(_id, None)
+                                try:
+                                    self._inflight_order.remove(_id)
+                                except ValueError:
+                                    pass
                     elif t == 'rx':
                         try:
                             on_rx(evt.get('line', ''))
@@ -390,6 +408,35 @@ class ControlModule:
                             on_error(evt.get('message', ''))
                         except Exception:
                             pass
+                    elif t == 'tx':
+                        # 보류 → 인플라이트 이동
+                        _id = evt.get('id')
+                        if _id is not None:
+                            with self._lock:
+                                line = self._pending_map.pop(_id, None)
+                                if _id in self._pending_order:
+                                    try:
+                                        self._pending_order.remove(_id)
+                                    except ValueError:
+                                        pass
+                                if line is None:
+                                    line = evt.get('line', '')
+                                self._inflight_map[_id] = line
+                                self._inflight_order.append(_id)
+
+            def snapshot(self, window_size: int):
+                """현재 전송 윈도우 상태 스냅샷 반환"""
+                with self._lock:
+                    inflight = [
+                        {'id': _id, 'line': self._inflight_map.get(_id, '')}
+                        for _id in list(self._inflight_order)
+                    ]
+                    pending_ids = list(self._pending_order)[:window_size]
+                    pending = [
+                        {'id': _id, 'line': self._pending_map.get(_id, '')}
+                        for _id in pending_ids
+                    ]
+                return {'inflight': inflight, 'pending_next': pending}
 
         def _on_rx(line: str):
             if line:
@@ -408,6 +455,15 @@ class ControlModule:
                     pass
 
         pc.tx_bridge = _Bridge(in_q, out_q, proc, _on_rx, _on_error)
+
+    def get_tx_window_snapshot(self):
+        """전송 윈도우 스냅샷 반환(API용)"""
+        pc = self.pc
+        if not pc.tx_bridge:
+            return {'window_size': pc.window_size, 'inflight': [], 'pending_next': []}
+        snap = pc.tx_bridge.snapshot(pc.window_size)
+        snap['window_size'] = pc.window_size
+        return snap
 
     @staticmethod
     async def _tx_run(port: str, baudrate: int, window_size: int, in_q: 'mp.Queue', out_q: 'mp.Queue'):

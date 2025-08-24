@@ -148,6 +148,49 @@ def send_command():
         return jsonify({'error': str(e)}), 500
 
 
+@api_bp.route('/printer/reconnect', methods=['POST'])
+def reconnect_printer():
+    """프린터 재연결(USB 해제 → 버퍼 초기화 → 재연결)
+    - 사용처: 대시보드 우측 상단 '재연결' 버튼
+    - 동작: PrinterCommunicator.disconnect() 후 잠시 대기, 내부 연결 루틴 재시도
+    """
+    try:
+        factor_client = current_app.factor_client
+        if not factor_client:
+            return jsonify({'success': False, 'error': 'Factor client not available'}), 503
+
+        # 연결 해제
+        if hasattr(factor_client, 'printer_comm') and factor_client.printer_comm:
+            try:
+                factor_client.printer_comm.disconnect()
+            except Exception as e:
+                logger.warning(f"재연결 중 disconnect 경고: {e}")
+
+        # 잠시 대기 후 재연결 시도
+        try:
+            import time as _t
+            _t.sleep(0.5)
+        except Exception:
+            pass
+
+        # 내부 연결 루틴 호출(폴링 스레드는 기존 루프가 running 상태에서 connected 플래그로 동작)
+        ok = False
+        try:
+            ok = factor_client._connect_to_printer()
+            factor_client.connected = bool(ok)
+        except Exception as e:
+            logger.error(f"재연결 오류: {e}")
+            ok = False
+
+        if ok:
+            return jsonify({'success': True, 'message': 'Printer reconnected'})
+        return jsonify({'success': False, 'error': 'Reconnect failed'}), 500
+
+    except Exception as e:
+        logger.error(f"재연결 처리 오류: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @api_bp.route('/config', methods=['GET'])
 def get_config():
     """현재 설정 반환"""
@@ -309,6 +352,23 @@ def api_error(error):
     """API 500 에러 핸들러"""
     logger.error(f"API 내부 오류: {error}")
     return jsonify({'error': 'Internal server error'}), 500
+@api_bp.route('/printer/tx-window', methods=['GET'])
+def get_tx_window():
+    """현재 G-code 송신 윈도우(인플라이트/대기열) 스냅샷
+    - 사용처: /dashboard 진행률 아래의 송신 로그 패널
+    """
+    try:
+        factor_client = current_app.factor_client
+        if not factor_client or not hasattr(factor_client, 'printer_comm'):
+            return jsonify({'window_size': 0, 'inflight': [], 'pending_next': []})
+        pc = factor_client.printer_comm
+        if hasattr(pc, 'control') and pc.control:
+            snap = pc.control.get_tx_window_snapshot()
+            return jsonify(snap)
+        return jsonify({'window_size': 0, 'inflight': [], 'pending_next': []})
+    except Exception as e:
+        logger.error(f"송신 윈도우 조회 오류: {e}")
+        return jsonify({'window_size': 0, 'inflight': [], 'pending_next': []})
 
 
 # 핫스팟 관련 API

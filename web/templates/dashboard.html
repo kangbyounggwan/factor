@@ -355,6 +355,7 @@
                 <a href="/">홈</a>
                 <a href="/settings">설정</a>
                 <a href="/api/status">API</a>
+                <a href="#" onclick="reconnect()">재연결</a>
             </div>
         </div>
         
@@ -409,6 +410,16 @@
                         <span id="progress-time">시간: --:-- / --:--</span>
                         <span id="progress-layers">레이어: -- / --</span>
                     </div>
+                    <div style="display:flex; gap:12px; margin-top:12px;">
+                        <div style="flex:1;">
+                            <h4 style="margin-bottom:8px;color:#333;">현재 전송 중(Inflight)</h4>
+                            <div id="tx-inflight" class="log-container" style="height:140px;"></div>
+                        </div>
+                        <div style="flex:1;">
+                            <h4 style="margin-bottom:8px;color:#333;">다음 전송 대기(Pending)</h4>
+                            <div id="tx-pending" class="log-container" style="height:140px;"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
             
@@ -454,14 +465,17 @@
 
     <script>
         let statusUpdateInterval;
+        let lastLogLine = null; // 최근에 표시한 마지막 로그 라인(중복 방지)
         
         // 페이지 로드 시 초기화
         document.addEventListener('DOMContentLoaded', function() {
             loadStatus();
             loadLogs();
+            loadTxWindow();
             
             // 3초마다 상태 업데이트
             statusUpdateInterval = setInterval(loadStatus, 3000);
+            setInterval(loadTxWindow, 1000);
             
             // 2초마다 로그 업데이트 (진행 상황을 더 자주 표시)
             setInterval(loadLogs, 2000);
@@ -515,6 +529,37 @@
                     }
                 });
             }
+        }
+
+        // 송신 윈도우 스냅샷 로드
+        async function loadTxWindow() {
+            try {
+                const res = await fetch('/api/printer/tx-window');
+                const data = await res.json();
+                updateTxWindow(data);
+            } catch (e) {
+                // 무시: 연결 전 등
+            }
+        }
+
+        function updateTxWindow(data) {
+            const inflightBox = document.getElementById('tx-inflight');
+            const pendingBox = document.getElementById('tx-pending');
+            const fmt = (item) => item && item.line ? item.line : '';
+            inflightBox.innerHTML = '';
+            (data.inflight || []).slice(0, data.window_size || 15).forEach(it => {
+                const div = document.createElement('div');
+                div.className = 'log-entry info';
+                div.textContent = fmt(it);
+                inflightBox.appendChild(div);
+            });
+            pendingBox.innerHTML = '';
+            (data.pending_next || []).slice(0, data.window_size || 15).forEach(it => {
+                const div = document.createElement('div');
+                div.className = 'log-entry';
+                div.textContent = fmt(it);
+                pendingBox.appendChild(div);
+            });
         }
         
         // 대시보드 업데이트
@@ -622,16 +667,28 @@
         // 로그 업데이트
         function updateLogs(logs) {
             const container = document.getElementById('log-container');
-            
-            // 최근 50개 로그만 표시
-            const recentLogs = logs.slice(-50);
-            
-            container.innerHTML = '';
-            recentLogs.forEach(log => {
+            if (!Array.isArray(logs) || logs.length === 0) return;
+
+            // 첫 호출 시 플레이스홀더 제거
+            if (container.firstChild && container.firstChild.textContent && container.firstChild.textContent.includes('시스템 로그를 불러오는 중')) {
+                container.innerHTML = '';
+            }
+
+            // 최근 배치에서 마지막 라인을 기준으로 증분 추가
+            let startIdx = 0;
+            if (lastLogLine !== null) {
+                for (let i = logs.length - 1; i >= 0; i--) {
+                    if (logs[i] === lastLogLine) {
+                        startIdx = i + 1;
+                        break;
+                    }
+                }
+            }
+
+            for (let i = startIdx; i < logs.length; i++) {
+                const log = logs[i];
                 const entry = document.createElement('div');
                 entry.className = 'log-entry';
-                
-                // 로그 레벨에 따른 클래스 추가
                 if (log.includes('ERROR') || log.includes('error')) {
                     entry.classList.add('error');
                 } else if (log.includes('WARNING') || log.includes('warning')) {
@@ -639,11 +696,19 @@
                 } else {
                     entry.classList.add('info');
                 }
-                
                 entry.textContent = log;
                 container.appendChild(entry);
-            });
-            
+            }
+
+            // 마지막 라인 업데이트
+            lastLogLine = logs[logs.length - 1];
+
+            // 너무 많아지면 상단부터 정리(최대 500줄 유지)
+            const MAX_LINES = 500;
+            while (container.childElementCount > MAX_LINES) {
+                container.removeChild(container.firstChild);
+            }
+
             // 스크롤을 맨 아래로
             container.scrollTop = container.scrollHeight;
         }
@@ -715,6 +780,25 @@
             }
             
             return result;
+        }
+
+        // 프린터 재연결
+        async function reconnect() {
+            try {
+                const res = await fetch('/api/printer/reconnect', {
+                    method: 'POST'
+                });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    addLogEntry('프린터 재연결 성공', 'info');
+                    // 상태 즉시 새로고침
+                    loadStatus();
+                } else {
+                    addLogEntry('프린터 재연결 실패: ' + (data.error || res.statusText), 'error');
+                }
+            } catch (e) {
+                addLogEntry('재연결 요청 오류: ' + e.message, 'error');
+            }
         }
         
         // 로그 엔트리 추가
