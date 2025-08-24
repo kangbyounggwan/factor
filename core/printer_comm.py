@@ -13,11 +13,28 @@ from typing import Dict, Any, Optional, Callable, List
 from dataclasses import dataclass
 from enum import Enum
 
+# 추가: 비동기 송신 프로세스용 의존성 (존재 시 사용, 없으면 기존 경로 사용)
+try:
+    import multiprocessing as mp
+    import asyncio
+    import collections
+    try:
+        import serial_asyncio  # type: ignore
+        _HAS_SERIAL_ASYNCIO = True
+    except Exception:
+        _HAS_SERIAL_ASYNCIO = False
+except Exception:
+    _HAS_SERIAL_ASYNCIO = False
+
 from .data_models import *
 from .printer_types import (
     PrinterType, FirmwareType, PrinterDetector, 
     PrinterHandlerFactory, ExtendedDataCollector
 )
+
+# 분리된 제어/데이터 취득 모듈
+from .core_control import ControlModule
+from .core_collection import DataCollectionModule
 
 
 class PrinterState(Enum):
@@ -58,10 +75,11 @@ class PrinterCommunicator:
         self.state = PrinterState.DISCONNECTED
         self.last_response_time = time.time()
         
-        # 스레드 관리
+        # 스레드/프로세스 관리
         self.running = False
         self.read_thread = None
         self.send_thread = None
+        self.tx_bridge = None  # 비동기 송신 브리지(프로세스 기반)
         
         # 큐 및 버퍼
         self.command_queue = Queue()
@@ -109,6 +127,9 @@ class PrinterCommunicator:
         self.capabilities = []
         self.max_temp_extruder = 300
         self.max_temp_bed = 120
+
+        # 윈도우/크레딧 전송을 위한 설정값 (설정에 연동 가능)
+        self.window_size = 32
         
         # 프린터 타입 감지 및 핸들러
         self.printer_detector = PrinterDetector()
@@ -119,6 +140,10 @@ class PrinterCommunicator:
         self.detection_responses = []  # 감지용 응답 저장
         
         self.logger.info("프린터 통신 모듈 초기화 완료")
+        
+        # 분리된 모듈 초기화
+        self.control = ControlModule(self)
+        self.collector = DataCollectionModule(self)
     
     def add_callback(self, event_type: str, callback: Callable):
         """콜백 함수 추가"""
@@ -134,101 +159,12 @@ class PrinterCommunicator:
                 self.logger.error(f"콜백 실행 오류 ({event_type}): {e}")
     
     def connect(self, port: Optional[str] = None, baudrate: Optional[int] = None) -> bool:
-        """프린터 연결"""
-        if self.connected:
-            self.logger.warning("이미 연결되어 있습니다")
-            return True
-        
-        if port is not None:
-            self.port = port
-        if baudrate is not None:
-            self.baudrate = baudrate
-        
-        if not self.port:
-            self.port = self._auto_detect_port()
-            if not self.port:
-                self.logger.error("프린터 포트를 찾을 수 없습니다")
-                return False
-        
-        try:
-            self.logger.info(f"프린터 연결 시도: {self.port}@{self.baudrate}")
-            self._set_state(PrinterState.CONNECTING)
-            
-            # 시리얼 연결
-            self.serial_conn = serial.Serial(
-                port=self.port,
-                baudrate=self.baudrate,
-                timeout=0.5,
-                write_timeout=1,
-                bytesize=serial.EIGHTBITS,
-                parity=serial.PARITY_NONE,
-                stopbits=serial.STOPBITS_ONE,
-                rtscts=False,
-                dsrdtr=False
-            )
-            
-            # 리셋/버퍼 클리어 및 안정화
-            try:
-                self.logger.info("시리얼 연결 안정화 중...")
-                
-                # DTR 리셋으로 보드 리셋
-                self.serial_conn.dtr = False
-                time.sleep(0.2)
-                self.serial_conn.dtr = True
-                
-                # 입력/출력 버퍼 클리어
-                self.serial_conn.reset_input_buffer()
-                self.serial_conn.reset_output_buffer()
-                
-                # 안정화 대기
-                time.sleep(2.0)
-                
-                self.logger.info("시리얼 연결 안정화 완료")
-                
-            except Exception as e:
-                self.logger.warning(f"시리얼 안정화 중 오류 (무시됨): {e}")
-                pass
-            
-            # 스레드 시작
-            self.running = True
-            self.read_thread = threading.Thread(target=self._read_worker, daemon=True)
-            self.send_thread = threading.Thread(target=self._send_worker, daemon=True)
-            
-            self.read_thread.start()
-            self.send_thread.start()
-            
-            self.connected = True
-            self._set_state(PrinterState.OPERATIONAL)
-            
-            # 초기 설정 명령
-            self._initialize_printer()
-            
-            self.logger.info("프린터 연결 완료")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"프린터 연결 실패: {e}")
-            self._set_state(PrinterState.ERROR)
-            return False
+        """프린터 연결 - 제어 모듈 위임"""
+        return self.control.connect(port, baudrate)
     
     def disconnect(self):
-        """프린터 연결 해제"""
-        self.logger.info("프린터 연결 해제 중...")
-        self.running = False
-        
-        # 스레드 종료 대기
-        if self.read_thread and self.read_thread.is_alive():
-            self.read_thread.join(timeout=5)
-        if self.send_thread and self.send_thread.is_alive():
-            self.send_thread.join(timeout=5)
-        
-        # 시리얼 연결 종료
-        if self.serial_conn and self.serial_conn.is_open:
-            self.serial_conn.close()
-        
-        self.connected = False
-        self._set_state(PrinterState.DISCONNECTED)
-        self.logger.info("프린터 연결 해제 완료")
+        """프린터 연결 해제 - 제어 모듈 위임"""
+        return self.control.disconnect()
     
     def _auto_detect_port(self) -> Optional[str]:
         """프린터 포트 자동 감지"""
@@ -378,65 +314,8 @@ class PrinterCommunicator:
                 time.sleep(1)
     
     def _process_response(self, line: str):
-        """응답 처리"""
-        self.logger.debug(f"응답 수신: {line}")
-        
-        # 응답을 last_response에 저장 (send_command_and_wait용)
-        self.last_response = line
-        self.last_rx_line = line
-        self.last_rx_time = time.time()
-        
-        # 감지용 응답 저장
-        self.detection_responses.append(line)
-        
-        # 프린터 핸들러가 있으면 특화 파싱 사용
-        if self.printer_handler:
-            # 온도 정보 파싱
-            temp_info = self.printer_handler.parse_temperature(line)
-            if temp_info:
-                self._trigger_callback('on_temperature_update', temp_info)
-                self._last_temp_line = line
-                return
-            
-            # 위치 정보 파싱
-            position = self.printer_handler.parse_position(line)
-            if position:
-                self.current_position = position
-                self._trigger_callback('on_position_update', position)
-                self._last_pos_line = line
-                return
-        else:
-            # 기본 파싱 방식
-            if self._parse_temperature(line):
-                self._last_temp_line = line
-                return
-            
-            if self._parse_position(line):
-                self._last_pos_line = line
-                return
-        
-        # 펌웨어 정보 파싱
-        if self._parse_firmware_info(line):
-            return
-        
-        # 오류 확인
-        if self.error_pattern.search(line):
-            self.logger.error(f"프린터 오류: {line}")
-            self._set_state(PrinterState.ERROR)
-            self._trigger_callback('on_error', line)
-        
-        # OK 응답
-        if self.ok_pattern.match(line):
-            pass  # 정상 응답
-        
-        # 응답 콜백
-        response = GCodeResponse(
-            command="",
-            response=line,
-            timestamp=time.time(),
-            success=not self.error_pattern.search(line)
-        )
-        self._trigger_callback('on_response', response)
+        """응답 처리 - 데이터 취득 모듈 위임"""
+        return self.collector.process_response(line)
     
     def _parse_temperature(self, line: str) -> bool:
         """온도 정보 파싱 (Marlin 스타일: ok T:25.2 /0.0 B:24.3 /0.0 @:0 B@:0)"""
@@ -532,18 +411,8 @@ class PrinterCommunicator:
         return False
     
     def send_command(self, command: str, priority: bool = False):
-        """G-code 명령 전송"""
-        if not self.connected:
-            self.logger.warning("프린터가 연결되지 않음")
-            return False
-        
-        # 우선순위 명령은 큐 앞쪽에 추가
-        if priority:
-            self._insert_priority_command(command)
-        else:
-            self.command_queue.put(command)
-        
-        return True
+        """G-code 명령 전송 - 제어 모듈 위임"""
+        return self.control.send_command(command, priority)
     
     def _insert_priority_command(self, command: str):
         """우선순위 명령을 큐 앞쪽에 삽입"""
@@ -561,129 +430,20 @@ class PrinterCommunicator:
             self.command_queue.put(cmd)
     
     def send_command_and_wait(self, command: str, timeout: float = 8.0) -> Optional[str]:
-        """동기식으로 바로 전송하고 같은 함수에서 읽어서 반환"""
-        if not self.connected or not (self.serial_conn and self.serial_conn.is_open):
-            self.logger.warning("프린터가 연결되지 않음")
-            return None
-
-        with self.serial_lock:
-            self.sync_mode = True
-            try:
-                # 준비: 내부 상태 초기화(의미있는 라인 캐시)
-                self._last_temp_line = None
-                self._last_pos_line = None
-                self.last_response = None
-
-                # 전송(LF)
-                self.logger.debug(f"[SYNC_TX] {command!r}")
-                self.serial_conn.write(f"{command}\n".encode("utf-8"))
-                self.serial_conn.flush()
-
-                # 동기 수신: readline 반복 + 추가 드레인
-                end = time.time() + timeout
-                while time.time() < end:
-                    line_bytes = self.serial_conn.readline()
-                    if line_bytes:
-                        line = line_bytes.decode("utf-8", errors="ignore").strip()
-                        if line:
-                            self.logger.debug(f"[SYNC_RX] {line}")
-                            # 수신 라인을 표준 처리 경로로 전달하여 콜백/하트비트 갱신
-                            try:
-                                self._process_response(line)
-                            except Exception:
-                                pass
-                            # 의미있는 응답이면 즉시 반환
-                            if command == "M105" and ("T:" in line or line.lower().startswith("ok")):
-                                return line
-                            if command == "M114" and ("X:" in line or line.lower().startswith("ok")):
-                                return line
-                            # 다른 라인이라도 마지막 응답으로 킵
-                            self.last_response = line
-                    else:
-                        if self.serial_conn.in_waiting:
-                            extra = self.serial_conn.read(self.serial_conn.in_waiting)
-                            try:
-                                extra_s = extra.decode("utf-8", errors="ignore")
-                            except Exception:
-                                extra_s = ""
-                            for part in extra_s.replace("\r\n","\n").replace("\r","\n").split("\n"):
-                                p = part.strip()
-                                if p:
-                                    self.logger.debug(f"[SYNC_RX] {p}")
-                                    try:
-                                        self._process_response(p)
-                                    except Exception:
-                                        pass
-                                    if command == "M105" and ("T:" in p or p.lower().startswith("ok")):
-                                        return p
-                                    if command == "M114" and ("X:" in p or p.lower().startswith("ok")):
-                                        return p
-                                    self.last_response = p
-                        time.sleep(0.05)
-
-                # fallback: 마지막 응답이라도 반환
-                if self.last_response:
-                    return self.last_response
-                self.logger.warning(f"명령 '{command}' 응답 타임아웃 ({timeout}초)")
-                return None
-            except Exception as e:
-                self.logger.error(f"동기 전송/수신 실패: {e}")
-                return None
-            finally:
-                self.sync_mode = False
+        """동기 전송/대기 - 제어 모듈 위임"""
+        return self.control.send_command_and_wait(command, timeout)
 
     def send_gcode(self, command: str, wait: bool = False, timeout: float = 8.0) -> bool:
-        """G-code 전송 유틸리티.
-        - wait=False: 즉시 LF로 전송 후 True 반환(에러 시 False)
-        - wait=True: send_command_and_wait로 동기 응답 확인 후 True/False
-        """
-        if not self.connected or not (self.serial_conn and self.serial_conn.is_open):
-            self.logger.warning("프린터가 연결되지 않음")
-            return False
-
-        if wait:
-            return self.send_command_and_wait(command, timeout=timeout) is not None
-
-        try:
-            with self.serial_lock:
-                self.serial_conn.write(f"{command}\n".encode("utf-8"))
-                self.serial_conn.flush()
-                self.logger.debug(f"[SYNC_TX] {command!r}")
-            return True
-        except Exception as e:
-            self.logger.error(f"G-code 전송 실패: {e}")
-            return False
-    
-
+        """G-code 전송 - 제어 모듈 위임"""
+        return self.control.send_gcode(command, wait, timeout)
     
     def get_temperature_info(self) -> TemperatureInfo:
-        """현재 온도 정보 반환 (동기 요청/파싱 결과 우선)"""
-        try:
-            response = self.send_command_and_wait("M105", timeout=5.0)
-            if response:
-                # 파싱 시도 → 내부 캐시에 저장됨
-                self._parse_temperature_response(response)
-                if self._last_temp_info:
-                    return self._last_temp_info
-            # 파싱 실패 시 빈 구조 반환
-            return TemperatureInfo(tool={})
-        except Exception as e:
-            self.logger.error(f"온도 정보 수집 실패: {e}")
-            return TemperatureInfo(tool={})
+        """현재 온도 정보 반환 - 데이터 취득 모듈 위임"""
+        return self.collector.get_temperature_info()
     
     def get_position(self) -> Position:
-        """현재 위치 정보 반환"""
-        try:
-            # 최신 위치 요청 및 응답 대기
-            response = self.send_command_and_wait("M114", timeout=5.0)
-            if response:
-                # 응답 파싱하여 위치 정보 업데이트
-                self._parse_position_response(response)
-            
-            return self.current_position
-        except Exception as e:
-            self.logger.error(f"위치 정보 수집 실패: {e}")
-            return self.current_position
+        """현재 위치 정보 반환 - 데이터 취득 모듈 위임"""
+        return self.collector.get_position()
     
     def get_printer_status(self) -> PrinterStatus:
         """프린터 상태 반환"""
@@ -732,6 +492,7 @@ class PrinterCommunicator:
     
     def emergency_stop(self):
         """비상 정지"""
+        # 비동기 브리지에서는 배리어 명령으로 처리
         self.send_command("M112", priority=True)
         self._set_state(PrinterState.ERROR)
     
@@ -803,6 +564,161 @@ class PrinterCommunicator:
             # 기본 핸들러 사용
             from .printer_types import FDMMarlinHandler
             self.printer_handler = FDMMarlinHandler()
+
+    # ===== 내부 유틸: 배리어 정규식, 비동기 브리지 시작 =====
+    @staticmethod
+    def _barrier_regex():
+        return re.compile(r"^(?:M109|M190|M400|G4|G28|G29|M112)\b", re.IGNORECASE)
+
+    def _start_async_tx_bridge(self):
+        """비동기 송신 프로세스 브리지 시작 및 수집기 연결"""
+        if not _HAS_SERIAL_ASYNCIO:
+            return
+
+        # 하위 프로세스 엔트리포인트
+        def _tx_proc_main(port: str, baudrate: int, window_size: int, in_q: 'mp.Queue', out_q: 'mp.Queue'):
+            asyncio.run(self._tx_run(port, baudrate, window_size, in_q, out_q))
+
+        # 별도 정적 함수로 분리할 수도 있으나, 한 파일 제한으로 내부에 유지
+        # mp context
+        ctx = mp.get_context('spawn')
+        in_q: 'mp.Queue' = ctx.Queue(maxsize=10000)
+        out_q: 'mp.Queue' = ctx.Queue(maxsize=10000)
+
+        # 프로세스 시작
+        proc = ctx.Process(target=_tx_proc_main, args=(self.port, self.baudrate, self.window_size, in_q, out_q), daemon=True)
+        proc.start()
+
+        # 브리지 객체(간단)
+        class _Bridge:
+            def __init__(self, in_q, out_q, proc, on_rx: Callable[[str], None], on_error: Callable[[str], None]):
+                self.in_q = in_q; self.out_q = out_q; self.proc = proc
+                self._seq = 0
+                self._acks = {}
+                self._lock = threading.Lock()
+                self._running = True
+                self._collector = threading.Thread(target=self._collect, args=(on_rx, on_error), daemon=True)
+                self._collector.start()
+
+            def enqueue(self, line: str, barrier: bool = False) -> int:
+                self._seq += 1
+                self.in_q.put({'id': self._seq, 'line': line, 'barrier': barrier, 'ts': time.time()})
+                return self._seq
+
+            def wait_ack(self, msg_id: int, timeout: float = 8.0) -> bool:
+                end = time.time() + timeout
+                while time.time() < end:
+                    with self._lock:
+                        if msg_id in self._acks:
+                            self._acks.pop(msg_id, None)
+                            return True
+                    time.sleep(0.005)
+                return False
+
+            def stop(self):
+                self._running = False
+                try:
+                    self.in_q.put(None)
+                except Exception:
+                    pass
+
+            def _collect(self, on_rx, on_error):
+                while self._running:
+                    try:
+                        evt = self.out_q.get(timeout=0.5)
+                    except Exception:
+                        continue
+                    t = evt.get('type')
+                    if t == 'ack':
+                        with self._lock:
+                            self._acks[evt['id']] = evt
+                    elif t == 'rx':
+                        try:
+                            on_rx(evt.get('line', ''))
+                        except Exception:
+                            pass
+                    elif t == 'error':
+                        try:
+                            on_error(evt.get('message', ''))
+                        except Exception:
+                            pass
+
+        # RX 이벤트는 기존 파서 경로로 전달하여 온도/위치/펌웨어 파싱 및 콜백 유지
+        def _on_rx(line: str):
+            if line:
+                try:
+                    self._process_response(line)
+                except Exception:
+                    pass
+
+        def _on_error(msg: str):
+            if msg:
+                try:
+                    self.logger.error(f"프린터 오류: {msg}")
+                    self._set_state(PrinterState.ERROR)
+                    self._trigger_callback('on_error', msg)
+                except Exception:
+                    pass
+
+        self.tx_bridge = _Bridge(in_q, out_q, proc, _on_rx, _on_error)
+
+    # 하위 프로세스용 런 루프(정적 메서드로 정의)
+    @staticmethod
+    async def _tx_run(port: str, baudrate: int, window_size: int, in_q: 'mp.Queue', out_q: 'mp.Queue'):
+        reader, writer = await serial_asyncio.open_serial_connection(url=port, baudrate=baudrate)
+        loop = asyncio.get_running_loop()
+        credit = asyncio.Semaphore(window_size)
+        inflight = collections.deque()
+        send_q: asyncio.Queue = asyncio.Queue(maxsize=window_size * 4)
+
+        def feeder():
+            while True:
+                msg = in_q.get()
+                if msg is None:
+                    loop.call_soon_threadsafe(send_q.put_nowait, None); break
+                loop.call_soon_threadsafe(send_q.put_nowait, msg)
+        threading.Thread(target=feeder, daemon=True).start()
+
+        async def writer_coro():
+            barrier_re = re.compile(r"^(?:M109|M190|M400|G4|G28|G29|M112)\b", re.IGNORECASE)
+            while True:
+                msg = await send_q.get()
+                if msg is None:
+                    break
+                if msg.get('barrier') or barrier_re.match(msg.get('line') or ''):
+                    while inflight:
+                        await asyncio.sleep(0.001)
+                await credit.acquire()
+                line = msg['line']
+                writer.write((line + "\n").encode('utf-8'))
+                try:
+                    await writer.drain()
+                except Exception:
+                    # 드레인 실패 시 에러 이벤트
+                    out_q.put({'type': 'error', 'message': 'writer.drain failed', 'ts': time.time()})
+                inflight.append(msg)
+                out_q.put({'type': 'tx', 'id': msg['id'], 'line': line, 'ts': time.time()})
+
+        async def reader_coro():
+            while True:
+                try:
+                    data = await reader.readuntil(b'\n')
+                except asyncio.IncompleteReadError:
+                    await asyncio.sleep(0.005); continue
+                s = data.decode('utf-8', errors='ignore').strip()
+                if not s:
+                    continue
+                out_q.put({'type': 'rx', 'line': s, 'ts': time.time()})
+                low = s.lower()
+                if low.startswith('ok') or s.startswith('start'):
+                    if inflight:
+                        acked = inflight.popleft()
+                        out_q.put({'type': 'ack', 'id': acked['id'], 'line': acked['line'], 'ts': time.time()})
+                    credit.release()
+                elif low.startswith('error') or '!!' in s or 'alarm' in s:
+                    out_q.put({'type': 'error', 'message': s, 'ts': time.time()})
+
+        await asyncio.gather(writer_coro(), reader_coro())
     
     def get_printer_type_info(self) -> Dict[str, str]:
         """프린터 타입 정보 반환"""

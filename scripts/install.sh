@@ -48,6 +48,24 @@ check_raspberry_pi() {
     fi
 }
 
+# 이전 설치 정리
+cleanup_previous_install() {
+    log_step "이전 설치 정리 중..."
+
+    # 서비스가 존재하면 중지 시도
+    if systemctl list-unit-files | grep -q '^factor-client.service'; then
+        systemctl stop factor-client.service || true
+    fi
+
+    # 과거 설치 디렉토리 제거(충돌 방지)
+    if [ -d /opt/factor-client ]; then
+        rm -rf /opt/factor-client
+        log_info "/opt/factor-client 제거 완료"
+    fi
+
+    log_info "이전 설치 정리 완료"
+}
+
 # 시스템 업데이트
 update_system() {
     log_step "시스템 업데이트 중..."
@@ -115,9 +133,17 @@ create_directories() {
 # 애플리케이션 설치
 install_application() {
     log_step "Factor 클라이언트 설치 중..."
-    
-    # 현재 디렉토리의 파일들을 복사
-    cp -r . /opt/factor-client/
+
+    # 최신 소스 배치: REPO_URL이 지정되면 git clone, 아니면 현재 디렉토리 복사
+    if [ -n "$REPO_URL" ]; then
+        BRANCH=${BRANCH:-master}
+        log_info "Git 저장소에서 소스 클론: $REPO_URL (브랜치: $BRANCH)"
+        git clone --depth 1 -b "$BRANCH" "$REPO_URL" /opt/factor-client
+    else
+        log_info "현재 디렉토리 소스를 /opt/factor-client 로 복사"
+        mkdir -p /opt/factor-client
+        cp -r . /opt/factor-client/
+    fi
     
     # Python 가상환경 생성
     cd /opt/factor-client
@@ -127,6 +153,8 @@ install_application() {
     # Python 패키지 설치
     pip install --upgrade pip
     pip install -r requirements.txt
+    # 비동기 시리얼 송신을 위한 추가 의존성
+    pip install "pyserial-asyncio>=0.6"
     
     # 권한 설정
     chown -R factor:factor /opt/factor-client

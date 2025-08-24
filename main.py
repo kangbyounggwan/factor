@@ -228,10 +228,6 @@ def main():
     parser.add_argument('-c', '--config', 
                        help='설정 파일 경로',
                        default=None)
-    parser.add_argument('-e', '--environment',
-                       choices=['wsl', 'rpi', 'auto'],
-                       default='auto',
-                       help='실행 환경 선택 (wsl: WSL, rpi: 라즈베리파이, auto: 자동 감지)')
     parser.add_argument('-d', '--daemon',
                        action='store_true',
                        help='데몬 모드로 실행')
@@ -241,32 +237,13 @@ def main():
     
     args = parser.parse_args()
     
-    # 환경별 설정 파일 자동 선택
-    config_path = args.config
-    if config_path is None:
-        if args.environment == 'wsl':
-            config_path = str(project_root / "config" / "settings_wsl.yaml")
-            print(f"WSL 환경 설정 파일 사용: {config_path}")
-        elif args.environment == 'rpi':
-            config_path = str(project_root / "config" / "settings_rpi.yaml")
-            print(f"라즈베리파이 환경 설정 파일 사용: {config_path}")
-        elif args.environment == 'auto':
-            # 자동 환경 감지
-            import platform
-            if "Microsoft" in platform.release():
-                config_path = str(project_root / "config" / "settings_wsl.yaml")
-                print(f"WSL 환경 감지됨 - 설정 파일: {config_path}")
-            else:
-                config_path = str(project_root / "config" / "settings_rpi.yaml")
-                print(f"라즈베리파이 환경 감지됨 - 설정 파일: {config_path}")
+    # 라즈베리파이 전용: 설정 파일 기본값 고정
+    config_path = args.config or str(project_root / "config" / "settings.yaml")
     
     # 설정 파일 존재 확인
     if not Path(config_path).exists():
         print(f"오류: 설정 파일을 찾을 수 없습니다: {config_path}")
-        print("사용 가능한 설정 파일:")
-        print("  - config/settings_wsl.yaml (WSL용)")
-        print("  - config/settings_rpi.yaml (라즈베리파이용)")
-        print("  - config/settings.yaml (기본)")
+        print("기본 설정 파일 경로를 확인하세요: config/settings.yaml")
         sys.exit(1)
     
     print(f"설정 파일: {config_path}")
