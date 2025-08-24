@@ -237,13 +237,13 @@ def main():
     
     args = parser.parse_args()
     
-    # 라즈베리파이 전용: 설정 파일 기본값 고정
-    config_path = args.config or str(project_root / "config" / "settings.yaml")
+    # 라즈베리파이 전용: 기본 설정 파일을 settings_rpi.yaml로 고정
+    config_path = args.config or str(project_root / "config" / "settings_rpi.yaml")
     
     # 설정 파일 존재 확인
     if not Path(config_path).exists():
         print(f"오류: 설정 파일을 찾을 수 없습니다: {config_path}")
-        print("기본 설정 파일 경로를 확인하세요: config/settings.yaml")
+        print("기본 설정 파일 경로를 확인하세요: config/settings_rpi.yaml")
         sys.exit(1)
     
     print(f"설정 파일: {config_path}")
