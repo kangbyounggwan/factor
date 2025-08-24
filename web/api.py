@@ -3,13 +3,17 @@ REST API 엔드포인트
 Factor 클라이언트 데이터 접근용 API
 """
 
-from flask import Blueprint, request, jsonify, current_app # type: ignore
+from flask import Blueprint, request, jsonify, current_app, Response, send_file # type: ignore
 import logging
 import json
 import logging
 import subprocess
 import re
 from typing import Dict, Any, List
+import os
+import io
+import zipfile
+import gzip
 
 api_bp = Blueprint('api', __name__)
 logger = logging.getLogger('api')
@@ -369,6 +373,102 @@ def get_tx_window():
     except Exception as e:
         logger.error(f"송신 윈도우 조회 오류: {e}")
         return jsonify({'window_size': 0, 'inflight': [], 'pending_next': []})
+
+
+# ===== UFP 업로드 프리뷰(자동 인쇄 금지) =====
+UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'uploads')
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+def _find_gcode_in_ufp(zf: zipfile.ZipFile) -> (str, bool):
+    gname = None; gz = False
+    for name in zf.namelist():
+        if name.lower().endswith('.gcode'):
+            return name, False
+    for name in zf.namelist():
+        if name.lower().endswith('.gcode.gz'):
+            return name, True
+    return None, False
+
+def _read_thumbnail_from_ufp(zf: zipfile.ZipFile) -> bytes:
+    # 일반적으로 'Metadata/thumbnail.png' 또는 'thumbnail.png' 등
+    candidates = [
+        'Metadata/thumbnail.png', 'thumbnail.png', 'metadata/thumbnail.png'
+    ]
+    for c in candidates:
+        if c in zf.namelist():
+            return zf.read(c)
+    return b''
+
+@api_bp.route('/ufp/upload', methods=['POST'])
+def upload_ufp_only():
+    """UFP 업로드만 수행(프린트 시작하지 않음) → 업로드 토큰 반환
+    프론트는 이 토큰으로 프리뷰 API 호출
+    """
+    try:
+        if 'file' not in request.files:
+            return jsonify({'success': False, 'error': 'file field missing'}), 400
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'success': False, 'error': 'no filename'}), 400
+        if not file.filename.lower().endswith('.ufp'):
+            return jsonify({'success': False, 'error': 'only .ufp allowed'}), 400
+        fname = file.filename
+        save_path = os.path.join(UPLOAD_DIR, fname)
+        file.save(save_path)
+        return jsonify({'success': True, 'token': fname})
+    except Exception as e:
+        logger.error(f"UFP 업로드 오류: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@api_bp.route('/ufp/preview/<token>', methods=['GET'])
+def preview_ufp(token: str):
+    """UFP 내부의 G-code 일부(앞뒤)와 썸네일을 미리보기용으로 반환"""
+    try:
+        path = os.path.join(UPLOAD_DIR, token)
+        if not os.path.exists(path):
+            return jsonify({'success': False, 'error': 'token not found'}), 404
+        with zipfile.ZipFile(path, 'r') as zf:
+            gname, gz = _find_gcode_in_ufp(zf)
+            if not gname:
+                return jsonify({'success': False, 'error': 'gcode not found in ufp'}), 400
+            # 썸네일
+            thumb = _read_thumbnail_from_ufp(zf)
+            thumb_b64 = None
+            if thumb:
+                import base64
+                thumb_b64 = 'data:image/png;base64,' + base64.b64encode(thumb).decode('ascii')
+
+            # G-code 일부만(예: 처음 100줄, 마지막 50줄)
+            f = zf.open(gname, 'r')
+            stream = io.TextIOWrapper(gzip.GzipFile(fileobj=f), encoding='utf-8', errors='ignore') if gz else io.TextIOWrapper(f, encoding='utf-8', errors='ignore')
+            head_lines = []
+            for _ in range(200):
+                try:
+                    line = next(stream)
+                except StopIteration:
+                    break
+                head_lines.append(line.rstrip('\n'))
+
+            # 꼬리부분 추출을 위해 다시 연다
+            f2 = zf.open(gname, 'r')
+            stream2 = io.TextIOWrapper(gzip.GzipFile(fileobj=f2), encoding='utf-8', errors='ignore') if gz else io.TextIOWrapper(f2, encoding='utf-8', errors='ignore')
+            tail_buffer = []
+            for l in stream2:
+                tail_buffer.append(l.rstrip('\n'))
+                if len(tail_buffer) > 100:
+                    tail_buffer.pop(0)
+
+            return jsonify({
+                'success': True,
+                'token': token,
+                'gcode_name': gname,
+                'gcode_head': head_lines,
+                'gcode_tail': tail_buffer,
+                'thumbnail': thumb_b64
+            })
+    except Exception as e:
+        logger.error(f"UFP 프리뷰 오류: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 # 핫스팟 관련 API

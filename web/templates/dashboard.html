@@ -393,10 +393,19 @@
                 </div>
                 
                 <div class="temperature-chart">
-                    <h3>온도 모니터링</h3>
-                    <div class="chart-container">
-                        <div class="chart-placeholder">
-                            온도 차트가 여기에 표시됩니다
+                    <h3>UFP 프리뷰</h3>
+                    <div class="chart-container" style="display:flex; gap:16px;">
+                        <div style="flex:1; overflow:auto;">
+                            <h4 style="margin-bottom:8px;">G-code 미리보기(처음 200줄)</h4>
+                            <pre id="ufp-gcode-head" style="height:220px; overflow:auto; background:#1f2937; color:#e5e7eb; padding:12px; border-radius:8px;"></pre>
+                        </div>
+                        <div style="flex:1; overflow:auto;">
+                            <h4 style="margin-bottom:8px;">G-code 미리보기(마지막 100줄)</h4>
+                            <pre id="ufp-gcode-tail" style="height:220px; overflow:auto; background:#1f2937; color:#e5e7eb; padding:12px; border-radius:8px;"></pre>
+                        </div>
+                        <div style="width:240px; text-align:center;">
+                            <h4 style="margin-bottom:8px;">썸네일</h4>
+                            <img id="ufp-thumb" alt="thumbnail" style="max-width:100%; border-radius:8px; background:#f0f0f0;" />
                         </div>
                     </div>
                 </div>
@@ -449,7 +458,8 @@
                         <label for="ufp-file">UFP 파일 선택 (.ufp)</label>
                         <input type="file" id="ufp-file" accept=".ufp">
                     </div>
-                    <button class="btn" onclick="uploadUfp()">업로드 & 인쇄 시작</button>
+                    <button class="btn" onclick="uploadUfpOnly()">업로드</button>
+                    <button class="btn" onclick="startPrintFromUploaded()">업로드 & 인쇄 시작</button>
                     <small style="color:#666;display:block;margin-top:8px;">진행 상황은 우측 시스템 로그에서 확인하세요.</small>
                 </div>
                 
@@ -813,8 +823,8 @@
             container.scrollTop = container.scrollHeight;
         }
 
-        // UFP 업로드/인쇄 시작
-        async function uploadUfp() {
+        // UFP 업로드만
+        async function uploadUfpOnly() {
             const input = document.getElementById('ufp-file');
             if (!input.files || input.files.length === 0) {
                 addLogEntry('UFP 파일을 선택하세요.', 'warning');
@@ -829,21 +839,57 @@
             form.append('file', file);
             try {
                 addLogEntry(`UFP 업로드 시작: ${file.name}`, 'info');
-                const res = await fetch('/ufp', { method: 'POST', body: form });
-                const text = await res.text();
-                if (res.ok) {
-                    addLogEntry('UFP 업로드 완료, 인쇄 전송을 시작했습니다.', 'info');
-                    // 업로드 응답 메시지를 로그에 일부 남김
-                    if (text) {
-                        addLogEntry(text.replace(/<[^>]*>/g,'').slice(0,200), 'info');
-                    }
-                    // 로그 패널을 더 자주 갱신
-                    loadLogs();
+                const res = await fetch('/api/ufp/upload', { method: 'POST', body: form });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    addLogEntry('UFP 업로드 완료(인쇄 대기).', 'info');
+                    // 프리뷰 로드
+                    await loadUfpPreview(data.token);
                 } else {
-                    addLogEntry('UFP 업로드 실패: ' + (text || res.statusText), 'error');
+                    addLogEntry('UFP 업로드 실패: ' + (data.error || res.statusText), 'error');
                 }
             } catch (e) {
                 addLogEntry('UFP 업로드 오류: ' + e.message, 'error');
+            }
+        }
+
+        async function loadUfpPreview(token) {
+            try {
+                const res = await fetch(`/api/ufp/preview/${encodeURIComponent(token)}`);
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    const head = (data.gcode_head || []).join('\n');
+                    const tail = (data.gcode_tail || []).join('\n');
+                    document.getElementById('ufp-gcode-head').textContent = head || '미리보기 없음';
+                    document.getElementById('ufp-gcode-tail').textContent = tail || '미리보기 없음';
+                    const img = document.getElementById('ufp-thumb');
+                    img.src = data.thumbnail || '';
+                } else {
+                    addLogEntry('UFP 프리뷰 실패: ' + (data.error || res.statusText), 'error');
+                }
+            } catch (e) {
+                addLogEntry('UFP 프리뷰 오류: ' + e.message, 'error');
+            }
+        }
+
+        // 업로드 후 인쇄 시작(기존 /ufp 라우트 유지)
+        async function startPrintFromUploaded() {
+            const input = document.getElementById('ufp-file');
+            if (!input.files || input.files.length === 0) {
+                addLogEntry('UFP 파일을 선택하세요.', 'warning');
+                return;
+            }
+            const form = new FormData();
+            form.append('file', input.files[0]);
+            try {
+                const res = await fetch('/ufp', { method: 'POST', body: form });
+                if (res.ok) {
+                    addLogEntry('업로드 & 인쇄 시작 완료', 'info');
+                } else {
+                    addLogEntry('인쇄 시작 실패', 'error');
+                }
+            } catch (e) {
+                addLogEntry('인쇄 시작 오류: ' + e.message, 'error');
             }
         }
     </script>
