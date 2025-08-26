@@ -129,7 +129,7 @@ class PrinterCommunicator:
         self.max_temp_bed = 120
 
         # 윈도우/크레딧 전송을 위한 설정값 (설정에 연동 가능)
-        self.window_size = 32
+        self.window_size = 50
         
         # 프린터 타입 감지 및 핸들러
         self.printer_detector = PrinterDetector()
@@ -495,6 +495,83 @@ class PrinterCommunicator:
         # 비동기 브리지에서는 배리어 명령으로 처리
         self.send_command("M112", priority=True)
         self._set_state(PrinterState.ERROR)
+
+    # ===== SD 카드 업로드/인쇄 =====
+    def sd_list(self) -> str:
+        """SD 카드 파일 목록(M20) 원문 반환"""
+        try:
+            return self.control.send_command_and_wait("M20", timeout=8.0) or ""
+        except Exception as e:
+            self.logger.error(f"SD 목록 조회 실패: {e}")
+            return ""
+
+    def sd_upload_gcode_lines(self, sd_name: str, lines) -> bool:
+        """SD 카드에 G-code 파일 쓰기(M28/M29)
+        - sd_name: SD에 저장될 파일명(호환성 위해 8.3 대문자 권장)
+        - lines: 이터러블 텍스트 라인
+        """
+        try:
+            # 쓰기 시작
+            if not self.control.send_command_and_wait(f"M28 {sd_name}", timeout=10.0):
+                self.logger.error("SD 쓰기 시작 실패(M28)")
+                return False
+
+            sent = 0
+            for raw in lines:
+                line = (raw or "").strip()
+                if not line or line.startswith(";"):
+                    continue
+                if ";" in line:
+                    line = line.split(";", 1)[0].strip()
+                    if not line:
+                        continue
+                # 일반 라인은 대기 없이 전송(동기 모드: 소프트 윈도우로 페이싱)
+                ok = self.control.send_gcode(line, wait=False)
+                if not ok:
+                    self.logger.warning(f"SD 업로드 중 전송 실패: {line}")
+                sent += 1
+                if sent % 200 == 0:
+                    # 버퍼 보호용 가벼운 동기화
+                    self.control.send_command_and_wait("M400", timeout=5.0)
+
+            # 종료
+            if not self.control.send_command_and_wait("M29", timeout=10.0):
+                self.logger.error("SD 쓰기 종료 실패(M29)")
+                return False
+            self.logger.info(f"SD 업로드 완료: {sd_name}, lines={sent}")
+            return True
+        except Exception as e:
+            self.logger.error(f"SD 업로드 실패: {e}")
+            return False
+
+    def sd_upload_and_print(self, sd_name: str, file_path: str, start: bool = True) -> bool:
+        """로컬 파일을 SD에 업로드 후 선택(M23)/인쇄(M24)"""
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                ok = self.sd_upload_gcode_lines(sd_name, f)
+            if not ok:
+                return False
+            # 파일 선택
+            if not self.control.send_command_and_wait(f"M23 {sd_name}", timeout=8.0):
+                self.logger.error("SD 파일 선택 실패(M23)")
+                return False
+            # 인쇄 시작
+            if start:
+                if not self.control.send_command_and_wait("M24", timeout=8.0):
+                    self.logger.error("SD 인쇄 시작 실패(M24)")
+                    return False
+            return True
+        except Exception as e:
+            self.logger.error(f"SD 업로드/인쇄 오류: {e}")
+            return False
+
+    def sd_print_progress(self) -> str:
+        """SD 인쇄 진행률(M27) 원문 반환"""
+        try:
+            return self.control.send_command_and_wait("M27", timeout=5.0) or ""
+        except Exception as e:
+            self.logger.error(f"SD 진행률 조회 실패: {e}")
+            return ""
     
     def _parse_temperature_response(self, response: str):
         """온도 응답 파싱 (M105) - 통합된 파싱 사용"""

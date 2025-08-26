@@ -58,6 +58,13 @@ def create_app(config_manager: ConfigManager, factor_client=None):
         'layers': {'current': 0, 'total': 0},
         'timestamp': time.time()
     })
+    # 동기 모드에서도 전송창에 보여줄 최근 전송 라인 스냅샷(간이)
+    app.config.setdefault('TX_WINDOW_SNAP', {
+        'window_size': 15,
+        'inflight': [],
+        'pending_next': [],
+        'timestamp': time.time()
+    })
     
     # 정적 파일 경로 설정
     static_folder = Path(__file__).parent / 'static'
@@ -162,8 +169,8 @@ def create_app(config_manager: ConfigManager, factor_client=None):
         # 블로킹이 필요한 명령 위주 + 주기적으로 한 번 대기
         if re.match(r"^(M109|M190|M400|G4|G28|G29|M112)\b", line, re.IGNORECASE):
             return True
-        # 25줄마다 한 번은 ok 대기 (버퍼 보호)
-        if sent_idx > 0 and (sent_idx % 25 == 0):
+        # 100줄마다 한 번은 ok 대기 (버퍼 보호)
+        if sent_idx > 0 and (sent_idx % 100 == 0):
             return True
         return False
 
@@ -181,6 +188,25 @@ def create_app(config_manager: ConfigManager, factor_client=None):
                         continue
                 cnt += 1
         return cnt
+
+    def _push_tx_line(line: str):
+        """대시보드 전송창 표시용 최근 전송 라인 버퍼 갱신(동기/비동기 공통)
+        - inflight에 최근 전송 N줄을 보관한다. pending_next는 동기 모드에서는 비움.
+        """
+        try:
+            snap = app.config.get('TX_WINDOW_SNAP', {})
+            inflight = snap.get('inflight', [])
+            inflight.append({'id': int(time.time() * 1000) % 1000000, 'line': line})
+            # 최대 window_size*2 줄만 유지
+            w = int(snap.get('window_size', 15))
+            if len(inflight) > (w * 2):
+                inflight[:] = inflight[-(w * 2):]
+            snap['inflight'] = inflight
+            snap['pending_next'] = []
+            snap['timestamp'] = time.time()
+            app.config['TX_WINDOW_SNAP'] = snap
+        except Exception:
+            pass
 
     def _stream_ufp_gcode(printer_comm, ufp_path: str, wait_ok: bool = True, send_delay: float = 0.0) -> int:
         """UFP(zip) 내부의 .gcode/.gcode.gz를 찾아 메모리 스트림으로 라인 단위 전송"""
@@ -242,6 +268,8 @@ def create_app(config_manager: ConfigManager, factor_client=None):
                         logging.getLogger('factor-firmware').warning(f"[PRINT] 전송 실패: {line}")
                     except Exception:
                         app.logger.warning(f"[PRINT] 전송 실패: {line}")
+                # 대시보드 전송창(동기 모드용 간이 표시) 갱신
+                _push_tx_line(line)
                 sent += 1
                 # 진행률 갱신
                 try:
@@ -345,6 +373,8 @@ def create_app(config_manager: ConfigManager, factor_client=None):
                             logging.getLogger('factor-firmware').warning(f"[PRINT] 전송 실패: {line}")
                         except Exception:
                             app.logger.warning(f"[PRINT] 전송 실패: {line}")
+                    # 대시보드 전송창(동기 모드용 간이 표시) 갱신
+                    _push_tx_line(line)
                     sent += 1
 
                     # 진행률 갱신
@@ -406,12 +436,22 @@ def create_app(config_manager: ConfigManager, factor_client=None):
                 app.logger.error('프린터 미연결 상태입니다.')
                 return
             pc = factor_client.printer_comm
+            # 새 작업 시작: 전송창 스냅샷 초기화
+            try:
+                app.config['TX_WINDOW_SNAP'] = {
+                    'window_size': 15,
+                    'inflight': [],
+                    'pending_next': [],
+                    'timestamp': time.time()
+                }
+            except Exception:
+                pass
             low = file_path.lower()
             if low.endswith('.ufp'):
-                total = _stream_ufp_gcode(pc, file_path, wait_ok=True, send_delay=0.0)
+                total = _stream_ufp_gcode(pc, file_path, wait_ok=False, send_delay=0.0)
                 app.logger.info(f'UFP 인쇄 전송 완료: {total} lines')
             elif low.endswith('.gcode') or low.endswith('.gcode.gz'):
-                total = _stream_gcode_file(pc, file_path, wait_ok=True, send_delay=0.0)
+                total = _stream_gcode_file(pc, file_path, wait_ok=False, send_delay=0.0)
                 app.logger.info(f'G-code 인쇄 전송 완료: {total} lines')
             else:
                 app.logger.error('지원하지 않는 파일 형식입니다.')

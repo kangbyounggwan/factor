@@ -387,12 +387,22 @@ def get_tx_window():
         if hasattr(pc, 'control') and pc.control and getattr(pc, 'tx_bridge', None):
             snap = pc.control.get_tx_window_snapshot()
             return jsonify(snap)
-        # 2) Fallback: 동기 경로일 때, 내부 command_queue를 이용해 대기열만 노출
+        # 2) Fallback: 동기 경로일 때, 최근 전송 스냅샷(TX_WINDOW_SNAP)을 노출
+        try:
+            snap = current_app.config.get('TX_WINDOW_SNAP', None)
+            if isinstance(snap, dict):
+                w = snap.get('window_size', getattr(pc, 'window_size', 15))
+                inflight = snap.get('inflight', [])
+                pending = snap.get('pending_next', [])
+                return jsonify({'window_size': w, 'inflight': inflight[-w:], 'pending_next': pending})
+        except Exception:
+            pass
+
+        # 3) 최후 대안: 내부 command_queue를 이용해 대기열만 노출
         pending = []
         try:
             q = getattr(pc, 'command_queue', None)
             if q is not None and hasattr(q, 'queue'):
-                # thread-safe가 아니므로 읽기만 수행
                 items = list(q.queue)  # type: ignore[attr-defined]
                 for i, line in enumerate(items[:15]):
                     pending.append({'id': i + 1, 'line': str(line)})
@@ -462,6 +472,107 @@ def upload_ufp_only():
         return jsonify({'success': True, 'token': fname})
     except Exception as e:
         logger.error(f"UFP/G-code 업로드 오류: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ===== SD 카드 업로드/인쇄 API =====
+@api_bp.route('/sd/list', methods=['GET'])
+def sd_list():
+    try:
+        fc = current_app.factor_client
+        if not fc or not hasattr(fc, 'printer_comm'):
+            return jsonify({'success': False, 'error': 'Factor client not available'}), 503
+        pc = fc.printer_comm
+        resp = pc.sd_list()
+        return jsonify({'success': True, 'raw': resp})
+    except Exception as e:
+        logger.error(f"SD 목록 조회 오류: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/sd/upload', methods=['POST'])
+def sd_upload():
+    """로컬 업로드 파일을 SD에 저장만 수행(M28/M29)"""
+    try:
+        fc = current_app.factor_client
+        if not fc or not hasattr(fc, 'printer_comm'):
+            return jsonify({'success': False, 'error': 'Factor client not available'}), 503
+        pc = fc.printer_comm
+
+        if 'file' not in request.files:
+            return jsonify({'success': False, 'error': 'file field missing'}), 400
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'success': False, 'error': 'no filename'}), 400
+
+        sd_name = request.form.get('sd_name', None)
+        if not sd_name:
+            # 8.3 호환 기본 이름 생성
+            base = os.path.splitext(file.filename)[0]
+            base = re.sub(r'[^A-Za-z0-9]', '', base).upper()[:8]
+            sd_name = (base or 'JOB') + '.GCO'
+
+        # 파일 스트림을 텍스트 라인 이터레이터로 변환
+        stream = io.TextIOWrapper(file.stream, encoding='utf-8', errors='ignore')
+        ok = pc.sd_upload_gcode_lines(sd_name, stream)
+        return jsonify({'success': bool(ok), 'sd_name': sd_name}) if ok else (jsonify({'success': False, 'error': 'upload failed'}), 500)
+    except Exception as e:
+        logger.error(f"SD 업로드 오류: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/sd/print', methods=['POST'])
+def sd_print():
+    """로컬 파일을 SD에 업로드하고 인쇄 시작(M23/M24)"""
+    try:
+        fc = current_app.factor_client
+        if not fc or not hasattr(fc, 'printer_comm'):
+            return jsonify({'success': False, 'error': 'Factor client not available'}), 503
+        pc = fc.printer_comm
+
+        if 'file' not in request.files:
+            return jsonify({'success': False, 'error': 'file field missing'}), 400
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'success': False, 'error': 'no filename'}), 400
+
+        sd_name = request.form.get('sd_name', None)
+        if not sd_name:
+            base = os.path.splitext(file.filename)[0]
+            base = re.sub(r'[^A-Za-z0-9]', '', base).upper()[:8]
+            sd_name = (base or 'JOB') + '.GCO'
+
+        # 임시 파일로 저장 후 업로드 & 인쇄
+        UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'uploads')
+        os.makedirs(UPLOAD_DIR, exist_ok=True)
+        temp_path = os.path.join(UPLOAD_DIR, file.filename)
+        file.save(temp_path)
+        ok = pc.sd_upload_and_print(sd_name, temp_path, start=True)
+        return jsonify({'success': bool(ok), 'sd_name': sd_name}) if ok else (jsonify({'success': False, 'error': 'print failed'}), 500)
+    except Exception as e:
+        logger.error(f"SD 업로드/인쇄 오류: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/sd/progress', methods=['GET'])
+def sd_progress():
+    try:
+        fc = current_app.factor_client
+        if not fc or not hasattr(fc, 'printer_comm'):
+            return jsonify({'success': False, 'error': 'Factor client not available'}), 503
+        pc = fc.printer_comm
+        raw = pc.sd_print_progress()
+        # 간단 파싱: byte a/b → 퍼센트
+        pct = None
+        try:
+            m = re.search(r"(\d+)\s*/\s*(\d+)", raw)
+            if m:
+                a = int(m.group(1)); b = int(m.group(2)); pct = round((a / b * 100.0), 1) if b > 0 else None
+        except Exception:
+            pass
+        return jsonify({'success': True, 'raw': raw, 'percent': pct})
+    except Exception as e:
+        logger.error(f"SD 진행률 조회 오류: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @api_bp.route('/ufp/preview/<token>', methods=['GET'])

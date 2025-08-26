@@ -41,6 +41,11 @@ class ControlModule:
             self.pc.phase_tracker = _PhaseTracker()
         except Exception:
             self.pc.phase_tracker = None
+        # 동기 모드 소프트 크레딧 윈도우(ack 기반 페이싱)
+        # 비동기 브리지 미사용 시에도 연속 전송을 가능하게 함
+        self._sync_window = 20  # 기본 동시 인플라이트 허용 수
+        self._outstanding = 0
+        self._lock = threading.Lock()
 
     # ===== 연결/해제 =====
     def connect(self, port: Optional[str] = None, baudrate: Optional[int] = None) -> bool:
@@ -298,9 +303,22 @@ class ControlModule:
             except Exception as e:
                 pc.logger.error(f"G-code 전송 실패(Async TX): {e}")
                 return False
+        # 동기 경로: 소프트 크레딧 윈도우 적용
+        # 1) 배리어 명령은 항상 동기 대기 수행
+        if self._barrier_regex().match(command or ""):
+            return self.send_command_and_wait(command, timeout=timeout) is not None
+        # 2) 호출자가 명시 wait=True인 경우에도 동기 대기 수행
         if wait:
             return self.send_command_and_wait(command, timeout=timeout) is not None
         try:
+            # outstanding < window 될 때까지 잠시 양보
+            while True:
+                with self._lock:
+                    if self._outstanding < self._sync_window:
+                        self._outstanding += 1
+                        break
+                time.sleep(0.001)
+
             with pc.serial_lock:
                 pc.serial_conn.write(f"{command}\n".encode("utf-8"))
                 pc.serial_conn.flush()
@@ -308,6 +326,9 @@ class ControlModule:
             return True
         except Exception as e:
             pc.logger.error(f"G-code 전송 실패: {e}")
+            with self._lock:
+                if self._outstanding > 0:
+                    self._outstanding -= 1
             return False
 
     # ===== 내부 유틸 =====
