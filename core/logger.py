@@ -100,6 +100,7 @@ def setup_logger(config: Dict[str, Any], name: str = None) -> logging.Logger:
     # 로거 생성
     logger_name = name or 'factor-client'
     logger = logging.getLogger(logger_name)
+    root_logger = logging.getLogger()
     
     # 기존 핸들러 제거
     for handler in logger.handlers[:]:
@@ -107,7 +108,9 @@ def setup_logger(config: Dict[str, Any], name: str = None) -> logging.Logger:
     
     # 로그 레벨 설정
     log_level = config.get('level', 'INFO').upper()
-    logger.setLevel(getattr(logging, log_level, logging.INFO))
+    level_value = getattr(logging, log_level, logging.INFO)
+    logger.setLevel(level_value)
+    root_logger.setLevel(level_value)
     
     # 콘솔 핸들러 (컬러 로깅)
     console_handler = colorlog.StreamHandler()
@@ -123,7 +126,8 @@ def setup_logger(config: Dict[str, Any], name: str = None) -> logging.Logger:
         }
     )
     console_handler.setFormatter(console_formatter)
-    logger.addHandler(console_handler)
+    # 모든 서브 로거 로그가 동일하게 파일/콘솔로 가도록 루트 로거에 연결
+    root_logger.addHandler(console_handler)
     
     # 파일 핸들러 설정
     log_file = config.get('file')
@@ -134,7 +138,7 @@ def setup_logger(config: Dict[str, Any], name: str = None) -> logging.Logger:
                 capacity=1000,
                 target_file=log_file
             )
-            logger.addHandler(ram_handler)
+            root_logger.addHandler(ram_handler)
         else:
             # 일반 로테이팅 파일 핸들러
             log_dir = Path(log_file).parent
@@ -150,7 +154,7 @@ def setup_logger(config: Dict[str, Any], name: str = None) -> logging.Logger:
                 '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
             )
             file_handler.setFormatter(file_formatter)
-            logger.addHandler(file_handler)
+            root_logger.addHandler(file_handler)
     
     # systemd journal 핸들러 (systemd 환경에서)
     if _is_systemd_environment():
@@ -160,7 +164,7 @@ def setup_logger(config: Dict[str, Any], name: str = None) -> logging.Logger:
                 '%(name)s - %(levelname)s - %(message)s'
             )
             journal_handler.setFormatter(journal_formatter)
-            logger.addHandler(journal_handler)
+            root_logger.addHandler(journal_handler)
     
     # 예외 로깅 설정
     def handle_exception(exc_type, exc_value, exc_traceback):
@@ -175,6 +179,8 @@ def setup_logger(config: Dict[str, Any], name: str = None) -> logging.Logger:
     
     sys.excepthook = handle_exception
     
+    # 중복 기록 방지: 개별 명명 로거는 상위로 전파만 하고 자체 핸들러는 두지 않음
+    logger.propagate = True
     logger.info(f"로거 설정 완료: {logger_name}")
     return logger
 
