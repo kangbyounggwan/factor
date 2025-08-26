@@ -467,8 +467,8 @@
                 <div class="control-panel">
                     <h3>UFP 업로드 / 인쇄</h3>
                     <div class="control-group">
-                        <label for="ufp-file">UFP 파일 선택 (.ufp)</label>
-                        <input type="file" id="ufp-file" accept=".ufp">
+                        <label for="ufp-file">파일 선택 (.ufp, .gcode, .gcode.gz)</label>
+                        <input type="file" id="ufp-file" accept=".ufp,.gcode,.gcode.gz">
                     </div>
                     <button class="btn" onclick="uploadUfpOnly()">업로드</button>
                     <button class="btn" onclick="startPrintFromUploaded()">업로드 & 인쇄 시작</button>
@@ -925,25 +925,27 @@
                 return;
             }
             const file = input.files[0];
-            if (!file.name.toLowerCase().endsWith('.ufp')) {
-                addLogEntry('확장자가 .ufp 인 파일만 업로드할 수 있습니다.', 'warning');
+            const name = file.name.toLowerCase();
+            const allowed = name.endsWith('.ufp') || name.endsWith('.gcode') || name.endsWith('.gcode.gz');
+            if (!allowed) {
+                addLogEntry('허용 확장자: .ufp, .gcode, .gcode.gz', 'warning');
                 return;
             }
             const form = new FormData();
             form.append('file', file);
             try {
-                addLogEntry(`UFP 업로드 시작: ${file.name}`, 'info');
+                addLogEntry(`파일 업로드 시작: ${file.name}`, 'info');
                 const res = await fetch('/api/ufp/upload', { method: 'POST', body: form });
                 const data = await res.json();
                 if (res.ok && data.success) {
-                    addLogEntry('UFP 업로드 완료(인쇄 대기).', 'info');
+                    addLogEntry('업로드 완료(인쇄 대기).', 'info');
                     // 프리뷰 로드
                     await loadUfpPreview(data.token);
                 } else {
-                    addLogEntry('UFP 업로드 실패: ' + (data.error || res.statusText), 'error');
+                    addLogEntry('업로드 실패: ' + (data.error || res.statusText), 'error');
                 }
             } catch (e) {
-                addLogEntry('UFP 업로드 오류: ' + e.message, 'error');
+                addLogEntry('업로드 오류: ' + e.message, 'error');
             }
         }
 
