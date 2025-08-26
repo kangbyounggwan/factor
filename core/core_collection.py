@@ -65,18 +65,6 @@ class DataCollectionModule:
         if self._parse_firmware_info(line):
             return
 
-        if pc.error_pattern.search(line):
-            pc.logger.error(f"프린터 오류: {line}")
-            try:
-                # 'No Checksum with line number' 감지 시 자동 리셋
-                low = line.lower()
-                if 'no checksum with line number' in low:
-                    if hasattr(pc, 'control') and pc.control:
-                        pc.control._auto_reset_line_number_mode()
-            except Exception:
-                pass
-            pc._set_state(pc.PrinterState.ERROR)
-            pc._trigger_callback('on_error', line)
 
         if pc.ok_pattern.match(line):
             # 동기 모드 소프트 윈도우 카운터 감소(연속 전송 페이싱)

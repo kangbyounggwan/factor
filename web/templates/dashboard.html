@@ -524,16 +524,9 @@
         // 페이지 로드 시 초기화
         document.addEventListener('DOMContentLoaded', function() {
             loadStatus();
-            loadLogs();
-            loadTxWindow();
-            
-            // 3초마다 상태 업데이트
+            // 3초마다 상태 업데이트(연결 여부만 체크). 연결 전에는 다른 폴링은 수행하지 않음
             statusUpdateInterval = setInterval(loadStatus, 3000);
-            phaseUpdateInterval = setInterval(loadPhase, 1000);
-            setInterval(loadTxWindow, 1000);
-            
-            // 2초마다 로그 업데이트 (진행 상황을 더 자주 표시)
-            setInterval(loadLogs, 2000);
+            // 나머지 폴링은 연결 상태에서만 수행되도록 각 함수 내에서 가드 처리
         });
         
         // 페이지 언로드 시 인터벌 정리
@@ -588,6 +581,7 @@
 
         // 송신 윈도우 스냅샷 로드
         async function loadTxWindow() {
+            if (!currentStatus || !currentStatus.connected) return;
             try {
                 const res = await fetch('/api/printer/tx-window');
                 const data = await res.json();
@@ -713,6 +707,7 @@
 
         // 단계(Phase) 폴링/표시
         async function loadPhase() {
+            if (!currentStatus || !currentStatus.connected) return;
             try {
                 const res = await fetch('/api/printer/phase');
                 const data = await res.json();
@@ -788,6 +783,7 @@
         
         // 로그 불러오기
         async function loadLogs() {
+            if (!currentStatus || !currentStatus.connected) return;
             try {
                 const response = await fetch('/api/logs');
                 const data = await response.json();

@@ -69,6 +69,8 @@ class FactorClient:
         self.error_count = 0
         self.last_heartbeat = time.time()
         self.connected = False
+        # 최근 하트비트 소스 타임라인(최대 10건)
+        self._hb_timeline: List[Dict[str, Any]] = []
         
         # 스레드 및 큐
         self.data_queue = Queue()
@@ -125,6 +127,14 @@ class FactorClient:
                 callback(data)
             except Exception as e:
                 self.logger.error(f"콜백 실행 오류 ({event_type}): {e}")
+
+    def _record_hb(self, src: str, meta: Dict[str, Any]):
+        try:
+            self._hb_timeline.append({'ts': time.time(), 'src': src, 'meta': meta})
+            if len(self._hb_timeline) > 10:
+                self._hb_timeline = self._hb_timeline[-10:]
+        except Exception:
+            pass
     
     def start(self):
         """클라이언트 시작"""
@@ -304,6 +314,27 @@ class FactorClient:
                         # 스레드 상태 확인
                         active_threads = [t for t in self.polling_threads if t.is_alive()]
                         self.logger.error(f"  - 활성 폴링 스레드: {len(active_threads)}/{len(self.polling_threads)}")
+                        # 최근 하트비트 타임라인 덤프
+                        try:
+                            self.logger.error("  - 최근 하트비트 이벤트:")
+                            for ev in self._hb_timeline[-10:]:
+                                ts = datetime.fromtimestamp(ev.get('ts', 0))
+                                self.logger.error(f"    * {ts} {ev.get('src')} {ev.get('meta')}")
+                        except Exception:
+                            pass
+                        # 폴링 스레드 재시작 시도
+                        try:
+                            if len(active_threads) < len(self.polling_threads):
+                                self.logger.warning("폴링 스레드 재시작 시도")
+                                self._start_polling_threads()
+                        except Exception:
+                            pass
+                        # 핑 전송(M105)
+                        try:
+                            if self.printer_comm:
+                                self.printer_comm.send_command("M105")
+                        except Exception:
+                            pass
                         
                         self._handle_error("heartbeat_timeout")
                     
@@ -447,6 +478,7 @@ class FactorClient:
         
         self.printer_status = status
         self.last_heartbeat = time.time()
+        self._record_hb('state_change', {'state': status.state, 'flags': status.flags})
         
         # 하트비트 업데이트 상세 로깅
         self.logger.debug(f"하트비트 업데이트 - 프린터 상태 변경: {old_state_name} → {status.state}")
@@ -460,6 +492,11 @@ class FactorClient:
         """온도 업데이트 콜백"""
         # 온도 업데이트 시에도 하트비트 업데이트
         self.last_heartbeat = time.time()
+        try:
+            keys = list((temp_info.tool or {}).keys())
+        except Exception:
+            keys = []
+        self._record_hb('temperature', {'tool_keys': keys})
         self.logger.debug(f"하트비트 업데이트 - 온도 업데이트")
         
         self._trigger_callback('on_temperature_update', temp_info)
@@ -469,6 +506,7 @@ class FactorClient:
         """위치 업데이트 콜백"""
         # 위치 업데이트 시에도 하트비트 업데이트
         self.last_heartbeat = time.time()
+        self._record_hb('position', {'x': position.x, 'y': position.y, 'z': position.z})
         self.logger.debug(f"하트비트 업데이트 - 위치 업데이트")
         
         self.position_data = position
@@ -479,6 +517,11 @@ class FactorClient:
         """G-code 응답 콜백"""
         # G-code 응답 시에도 하트비트 업데이트
         self.last_heartbeat = time.time()
+        try:
+            preview = (response.response or '')[:60]
+        except Exception:
+            preview = ''
+        self._record_hb('gcode_response', {'preview': preview})
         self.logger.debug(f"하트비트 업데이트 - G-code 응답")
         
         self._trigger_callback('on_gcode_response', response)
