@@ -186,7 +186,7 @@ class ControlModule:
             pc.command_queue.put(command)
         return True
 
-    def send_command_and_wait(self, command: str, timeout: float = 8.0):
+    def send_command_and_wait(self, command: str, timeout: float = 8.0, collect: bool = False):
         """
         동기 전송 후 ack/의미 있는 응답을 대기
 
@@ -211,6 +211,7 @@ class ControlModule:
                         return pc._last_temp_line
                     if command == "M114" and pc._last_pos_line:
                         return pc._last_pos_line
+                    # 비동기 브리지에서는 라인 수집을 직접 지원하지 않음
                     return pc.last_response if pc.last_response else "ok"
                 pc.logger.warning(f"명령 '{command}' 응답 타임아웃 ({timeout}초)")
                 return None
@@ -230,20 +231,29 @@ class ControlModule:
                 pc.serial_conn.write(f"{command}\n".encode("utf-8"))
                 pc.serial_conn.flush()
                 end = time.time() + timeout
+                collected: list[str] = [] if collect else None  # type: ignore[assignment]
+                def _maybe_collect(s: str):
+                    if collect and s:
+                        collected.append(s)  # type: ignore[union-attr]
                 while time.time() < end:
                     line_bytes = pc.serial_conn.readline()
                     if line_bytes:
                         line = line_bytes.decode("utf-8", errors="ignore").strip()
                         if line:
                             pc.logger.debug(f"[SYNC_RX] {line}")
+                            _maybe_collect(line)
                             try:
                                 pc._process_response(line)
                             except Exception:
                                 pass
-                            if command == "M105" and ("T:" in line or line.lower().startswith("ok")):
-                                return line
-                            if command == "M114" and ("X:" in line or line.lower().startswith("ok")):
-                                return line
+                            low = line.lower()
+                            if collect and (low.startswith('ok') or 'end file list' in low):
+                                break
+                            if not collect:
+                                if command == "M105" and ("T:" in line or low.startswith("ok")):
+                                    return line
+                                if command == "M114" and ("X:" in line or low.startswith("ok")):
+                                    return line
                             pc.last_response = line
                     else:
                         if pc.serial_conn.in_waiting:
@@ -256,16 +266,23 @@ class ControlModule:
                                 p = part.strip()
                                 if p:
                                     pc.logger.debug(f"[SYNC_RX] {p}")
+                                    _maybe_collect(p)
                                     try:
                                         pc._process_response(p)
                                     except Exception:
                                         pass
-                                    if command == "M105" and ("T:" in p or p.lower().startswith("ok")):
-                                        return p
-                                    if command == "M114" and ("X:" in p or p.lower().startswith("ok")):
-                                        return p
+                                    lowp = p.lower()
+                                    if collect and (lowp.startswith('ok') or 'end file list' in lowp):
+                                        break
+                                    if not collect:
+                                        if command == "M105" and ("T:" in p or lowp.startswith("ok")):
+                                            return p
+                                        if command == "M114" and ("X:" in p or lowp.startswith("ok")):
+                                            return p
                                     pc.last_response = p
                         time.sleep(0.05)
+                if collect and collected is not None and len(collected) > 0:
+                    return "\n".join(collected)
                 if pc.last_response:
                     return pc.last_response
                 pc.logger.warning(f"명령 '{command}' 응답 타임아웃 ({timeout}초)")

@@ -500,7 +500,8 @@ class PrinterCommunicator:
     def sd_list(self) -> str:
         """SD 카드 파일 목록(M20) 원문 반환"""
         try:
-            return self.control.send_command_and_wait("M20", timeout=8.0) or ""
+            # 동기 모드에서는 목록 전체를 수집한다(OK 또는 'End file list'까지)
+            return self.control.send_command_and_wait("M20", timeout=8.0, collect=True) or ""
         except Exception as e:
             self.logger.error(f"SD 목록 조회 실패: {e}")
             return ""
