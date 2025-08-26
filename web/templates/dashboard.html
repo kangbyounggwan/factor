@@ -438,6 +438,11 @@
                         <span id="sd-last-update" style="color:#666; font-size:14px;">—</span>
                     </div>
                     <div id="sd-file-list" class="log-container" style="height:220px;"></div>
+                    <div style="margin-top:12px; display:flex; gap:12px; align-items:center;">
+                        <input type="file" id="sd-upload-file" accept=".gcode,.gco,.gc">
+                        <input type="text" id="sd-upload-name" placeholder="원격 파일명(옵션)" style="flex:1; padding:8px; border:2px solid #e0e0e0; border-radius:8px;">
+                        <button class="btn" style="width:auto; padding:8px 12px;" onclick="uploadSdToCard()">SD에 업로드</button>
+                    </div>
                 </div>
             </div>
             
@@ -912,6 +917,34 @@
             } catch (e) {
                 const box = document.getElementById('sd-file-list');
                 if (box) box.innerHTML = `<div class="log-entry error">오류: ${e.message}</div>`;
+            }
+        }
+
+        async function uploadSdToCard() {
+            const input = document.getElementById('sd-upload-file');
+            const nameInput = document.getElementById('sd-upload-name');
+            if (!input || !input.files || input.files.length === 0) {
+                addLogEntry('업로드할 G-code 파일을 선택하세요.', 'warning');
+                return;
+            }
+            const file = input.files[0];
+            const form = new FormData();
+            form.append('file', file);
+            if (nameInput && nameInput.value && nameInput.value.trim().length > 0) {
+                form.append('name', nameInput.value.trim());
+            }
+            try {
+                addLogEntry(`SD 업로드 시작: ${file.name}`, 'info');
+                const res = await fetch('/api/printer/sd/upload', { method: 'POST', body: form });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    addLogEntry(`SD 업로드 완료: ${data.name} (${data.lines} lines)`, 'info');
+                    await loadSdFiles();
+                } else {
+                    addLogEntry('SD 업로드 실패: ' + (data.error || res.statusText), 'error');
+                }
+            } catch (e) {
+                addLogEntry('SD 업로드 오류: ' + e.message, 'error');
             }
         }
 

@@ -403,6 +403,70 @@ def list_sd_files():
     except Exception as e:
         logger.error(f"SD 목록 조회 오류: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+@api_bp.route('/printer/sd/upload', methods=['POST'])
+def upload_sd_file():
+    """G-code 파일을 프린터 SD 카드로 업로드(M28/M29)"""
+    try:
+        fc = current_app.factor_client
+        if not fc or not hasattr(fc, 'printer_comm'):
+            return jsonify({'success': False, 'error': 'Factor client not available'}), 503
+        pc = fc.printer_comm
+
+        if 'file' not in request.files:
+            return jsonify({'success': False, 'error': 'file field missing'}), 400
+        upfile = request.files['file']
+        if upfile.filename == '':
+            return jsonify({'success': False, 'error': 'no filename'}), 400
+
+        # 원격 파일명
+        name_override = (request.form.get('name') or '').strip()
+        remote_name = name_override if name_override else upfile.filename
+        import re
+        remote_name = re.sub(r'[^A-Za-z0-9._/\-]+', '_', remote_name).lstrip('/')
+        if not remote_name:
+            return jsonify({'success': False, 'error': 'invalid remote name'}), 400
+
+        # SD 초기화 시도
+        try:
+            pc.send_command('M21')
+        except Exception:
+            pass
+
+        # 업로드 시작
+        pc.send_command_and_wait(f'M28 {remote_name}', timeout=5.0)
+
+        # 라인 단위로 기록
+        import io as _io
+        total_lines = 0
+        total_bytes = 0
+        text_stream = _io.TextIOWrapper(upfile.stream, encoding='utf-8', errors='ignore')
+        for raw in text_stream:
+            line = raw.rstrip('\r\n')
+            pc.send_command(line)
+            total_lines += 1
+            total_bytes += len(raw.encode('utf-8', errors='ignore'))
+
+        # 업로드 종료
+        end_ok = pc.send_command_and_wait('M29', timeout=8.0)
+
+        # 목록 갱신 시도
+        try:
+            pc.send_command_and_wait('M20', timeout=3.0)
+            time.sleep(0.1)
+        except Exception:
+            pass
+
+        return jsonify({'success': True, 'name': remote_name, 'lines': total_lines, 'bytes': total_bytes, 'closed': bool(end_ok)})
+    except Exception as e:
+        # 종료 시도
+        try:
+            fc = current_app.factor_client
+            if fc and hasattr(fc, 'printer_comm'):
+                fc.printer_comm.send_command('M29')
+        except Exception:
+            pass
+        return jsonify({'success': False, 'error': str(e)}), 500
 @api_bp.route('/printer/tx-window', methods=['GET'])
 def get_tx_window():
     """현재 G-code 송신 윈도우(인플라이트/대기열) 스냅샷
