@@ -61,6 +61,19 @@ def get_status():
                 'connected': factor_client.is_connected(),
                 'timestamp': factor_client.last_heartbeat
             }
+        # SD 진행률 캐시가 활성화되어 있으면 진행률 필드를 캐시로 대체
+        try:
+            sd_prog = getattr(factor_client, '_sd_progress_cache', None)
+            if isinstance(sd_prog, dict) and sd_prog.get('active'):
+                status_data['progress'] = {
+                    'completion': float(sd_prog.get('completion', 0.0)),
+                    'time_elapsed': None,
+                    'time_left': sd_prog.get('eta_sec', None),
+                    'layers': {'current': 0, 'total': 0},
+                    'source': 'sd'
+                }
+        except Exception:
+            pass
         
         return jsonify(status_data)
         
@@ -102,7 +115,7 @@ def get_temperature():
                 return jsonify({'tool': {}, 'bed': {}})
         else:
             temp_info = factor_client.get_temperature_info()
-            return jsonify(temp_info.to_dict())
+        return jsonify(temp_info.to_dict())
         
     except Exception as e:
         logger.error(f"온도 정보 조회 오류: {e}")
@@ -125,7 +138,7 @@ def get_position():
                 return jsonify({'x': 0, 'y': 0, 'z': 0, 'e': 0})
         else:
             position = factor_client.get_position()
-            return jsonify(position.to_dict())
+        return jsonify(position.to_dict())
         
     except Exception as e:
         logger.error(f"위치 정보 조회 오류: {e}")
@@ -143,8 +156,14 @@ def get_progress():
         # SD 진행률 오토리포트 캐시 우선
         sd_prog = getattr(factor_client, '_sd_progress_cache', None)
         if isinstance(sd_prog, dict) and sd_prog.get('active'):
-            return jsonify(sd_prog)
-            
+            return jsonify({
+                'completion': float(sd_prog.get('completion', 0.0)),
+                'time_elapsed': None,
+                'time_left': sd_prog.get('eta_sec', None),
+                'layers': {'current': 0, 'total': 0},
+                'source': 'sd'
+            })
+        
         progress = factor_client.get_print_progress()
         return jsonify(progress.to_dict())
         
@@ -239,21 +258,21 @@ def reconnect_printer():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@api_bp.route('/printer/cancel', methods=['POST'])
-def cancel_print():
-    """인쇄 취소: 큐 비우기 → 파킹 이동 → 쿨다운"""
-    try:
-        fc = current_app.factor_client
-        if not fc or not hasattr(fc, 'printer_comm'):
-            return jsonify({'success': False, 'error': 'Factor client not available'}), 503
-        pc = fc.printer_comm
-        if hasattr(pc, 'control') and pc.control:
-            ok = pc.control.cancel_print()
-            return jsonify({'success': bool(ok)}) if ok else (jsonify({'success': False}), 500)
-        return jsonify({'success': False, 'error': 'control not available'}), 500
-    except Exception as e:
-        logger.error(f"취소 처리 오류: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+# @api_bp.route('/printer/cancel', methods=['POST'])
+# def cancel_print():
+#     """인쇄 취소: 큐 비우기 → 파킹 이동 → 쿨다운"""
+#     try:
+#         fc = current_app.factor_client
+#         if not fc or not hasattr(fc, 'printer_comm'):
+#             return jsonify({'success': False, 'error': 'Factor client not available'}), 503
+#         pc = fc.printer_comm
+#         if hasattr(pc, 'control') and pc.control:
+#             ok = pc.control.cancel_print()
+#             return jsonify({'success': bool(ok)}) if ok else (jsonify({'success': False}), 500)
+#         return jsonify({'success': False, 'error': 'control not available'}), 500
+#     except Exception as e:
+#         logger.error(f"취소 처리 오류: {e}")
+#         return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @api_bp.route('/config', methods=['GET'])
@@ -504,6 +523,100 @@ def sd_print_file():
         return jsonify({'success': True})
     except Exception as e:
         logger.error(f"SD 출력 시작 오류: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@api_bp.route('/printer/sd/cancel', methods=['POST'])
+def sd_cancel_print():
+    """SD 인쇄 일시중지/취소.
+    순서: M25 → (선택) M400 → M524 → M27 S0 → (선택) 파킹/쿨다운
+    요청 JSON 예:
+      {
+        "mode": "pause" | "cancel",   # 기본 cancel
+        "wait_finish": true|false,      # M400 대기(선택)
+        "park": true|false,             # 안전 파킹(선택, 펌웨어 지원 시 G27)
+        "cooldown": true|false          # 히터/팬 정지(선택)
+      }
+    """
+    try:
+        fc = current_app.factor_client
+        if not fc or not hasattr(fc, 'printer_comm'):
+            return jsonify({'success': False, 'error': 'Factor client not available'}), 503
+        pc = fc.printer_comm
+
+        # 업로드 등으로 TX 금지 중이면 거절
+        if getattr(pc, 'tx_inhibit', False):
+            return jsonify({'success': False, 'error': 'busy (upload/lock active)'}), 409
+
+        data = request.get_json(silent=True) or {}
+        mode = (data.get('mode') or 'cancel').strip().lower()
+        wait_finish = bool(data.get('wait_finish', False))
+        do_park = bool(data.get('park', False))
+        do_cooldown = bool(data.get('cooldown', False))
+
+        # 1) 일시정지: M25
+        ok_pause = pc.send_command_and_wait('M25', timeout=5.0)
+        if ok_pause is False:
+            return jsonify({'success': False, 'error': 'failed to pause SD print (M25)'}), 500
+
+        # 2) 모션 마무리 대기(선택): M400
+        if wait_finish:
+            try:
+                pc.send_command_and_wait('M400', timeout=5.0)
+            except Exception:
+                pass
+
+        # 3) SD 인쇄 완전 중단(파일 닫기): M524
+        if mode != 'pause':
+            try:
+                # 일부 펌웨어는 ok가 지연될 수 있으므로 비대기 전송 허용
+                pc.send_command('M524')
+            except Exception:
+                pass
+
+        # 4) 자동 리포트 끄기(켜뒀다면): M27 S0
+        try:
+            pc.send_command('M27 S0')
+        except Exception:
+            pass
+
+        # 5) 안전 파킹/쿨다운(선택)
+        if do_park:
+            try:
+                pc.send_command_and_wait('G27', timeout=5.0)
+            except Exception:
+                pass
+
+        if do_cooldown:
+            try:
+                pc.send_command('M106 S0')  # 팬 OFF
+                pc.send_command('M104 S0')  # 노즐 OFF
+                pc.send_command('M140 S0')  # 베드 OFF
+            except Exception:
+                pass
+
+        # 진행률 캐시 비활성화
+        try:
+            setattr(fc, '_sd_progress_cache', {
+                'active': False,
+                'completion': 0.0,
+                'printed_bytes': 0,
+                'total_bytes': 0,
+                'eta_sec': None,
+                'last_update': time.time(),
+                'source': 'sd'
+            })
+        except Exception:
+            pass
+
+        return jsonify({
+            'success': True,
+            'mode': ('pause' if mode == 'pause' else 'cancel'),
+            'wait_finish': wait_finish,
+            'park': do_park,
+            'cooldown': do_cooldown
+        })
+    except Exception as e:
+        logger.error(f"SD 출력 취소 오류: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @api_bp.route('/printer/sd/upload', methods=['POST'])

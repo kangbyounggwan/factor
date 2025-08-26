@@ -819,18 +819,19 @@
 
         // 인쇄 취소
         async function cancelPrint() {
-            if (!confirm('진행 중인 인쇄를 취소하고 파킹/쿨다운 하시겠습니까?')) return;
+            if (!confirm('SD 인쇄를 중지/취소하시겠습니까? (확인: 취소 / 취소: 일시중지)')) return;
             try {
-                const res = await fetch('/api/printer/cancel', { method: 'POST' });
+                // 기본 cancel
+                const res = await fetch('/api/printer/sd/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'cancel' }) });
                 const data = await res.json();
                 if (res.ok && data.success) {
-                    addLogEntry('인쇄 취소: 큐 정리 및 파킹/쿨다운 명령 전송', 'warning');
+                    addLogEntry(`SD 인쇄 ${data.mode === 'pause' ? '일시중지' : '취소'} 완료`, 'warning');
                     loadStatus();
                 } else {
-                    addLogEntry('인쇄 취소 실패', 'error');
+                    addLogEntry('SD 인쇄 취소 실패', 'error');
                 }
             } catch (e) {
-                addLogEntry('인쇄 취소 오류: ' + e.message, 'error');
+                addLogEntry('SD 인쇄 취소 오류: ' + e.message, 'error');
             }
         }
         

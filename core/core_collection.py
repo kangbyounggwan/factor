@@ -186,6 +186,11 @@ class DataCollectionModule:
                                 'last_update': time.time(),
                                 'source': 'sd'
                             })
+                            # 프린터 상태를 printing 으로 보조 설정
+                            try:
+                                self.pc._set_state(self.pc.PrinterState.PRINTING)
+                            except Exception:
+                                pass
                     except Exception:
                         pass
             elif 'not sd printing' in llow2 or 'sd printing byte 0/0' in llow2:
@@ -201,6 +206,11 @@ class DataCollectionModule:
                             'last_update': time.time(),
                             'source': 'sd'
                         })
+                        # printing 종료 보조: 상태를 idle/unknown 으로 복귀
+                        try:
+                            self.pc._set_state(self.pc.PrinterState.IDLE)
+                        except Exception:
+                            pass
                 except Exception:
                     pass
         except Exception:
