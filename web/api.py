@@ -437,7 +437,7 @@ def _find_gcode_in_ufp(zf: zipfile.ZipFile) -> (str, bool):
 
 @api_bp.route('/ufp/upload', methods=['POST'])
 def upload_ufp_only():
-    """UFP 업로드만 수행(프린트 시작하지 않음) → 업로드 토큰 반환
+    """UFP/G-code 업로드만 수행(프린트 시작하지 않음) → 업로드 토큰 반환
     프론트는 이 토큰으로 프리뷰 API 호출
     """
     try:
@@ -446,46 +446,69 @@ def upload_ufp_only():
         file = request.files['file']
         if file.filename == '':
             return jsonify({'success': False, 'error': 'no filename'}), 400
-        if not file.filename.lower().endswith('.ufp'):
-            return jsonify({'success': False, 'error': 'only .ufp allowed'}), 400
+
         fname = file.filename
+        lower = fname.lower()
+        allowed = (
+            lower.endswith('.ufp') or
+            lower.endswith('.gcode') or
+            lower.endswith('.gcode.gz')
+        )
+        if not allowed:
+            return jsonify({'success': False, 'error': 'only .ufp, .gcode, .gcode.gz allowed'}), 400
+
         save_path = os.path.join(UPLOAD_DIR, fname)
         file.save(save_path)
         return jsonify({'success': True, 'token': fname})
     except Exception as e:
-        logger.error(f"UFP 업로드 오류: {e}")
+        logger.error(f"UFP/G-code 업로드 오류: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @api_bp.route('/ufp/preview/<token>', methods=['GET'])
 def preview_ufp(token: str):
-    """UFP 내부의 G-code 일부(앞뒤)와 썸네일을 미리보기용으로 반환"""
+    """UFP 내부의 G-code 일부 또는 G-code 파일 일부(앞부분)를 미리보기용으로 반환"""
     try:
         path = os.path.join(UPLOAD_DIR, token)
         if not os.path.exists(path):
             return jsonify({'success': False, 'error': 'token not found'}), 404
-        with zipfile.ZipFile(path, 'r') as zf:
-            gname, gz = _find_gcode_in_ufp(zf)
-            if not gname:
-                return jsonify({'success': False, 'error': 'gcode not found in ufp'}), 400
-            # G-code 일부만(처음 일부 라인)
-            f = zf.open(gname, 'r')
-            stream = io.TextIOWrapper(gzip.GzipFile(fileobj=f), encoding='utf-8', errors='ignore') if gz else io.TextIOWrapper(f, encoding='utf-8', errors='ignore')
-            head_lines = []
+
+        lower = token.lower()
+        head_lines: List[str] = []
+
+        # 1) UFP 컨테이너 처리
+        if lower.endswith('.ufp'):
+            with zipfile.ZipFile(path, 'r') as zf:
+                gname, gz = _find_gcode_in_ufp(zf)
+                if not gname:
+                    return jsonify({'success': False, 'error': 'gcode not found in ufp'}), 400
+                f = zf.open(gname, 'r')
+                stream = io.TextIOWrapper(
+                    gzip.GzipFile(fileobj=f), encoding='utf-8', errors='ignore'
+                ) if gz else io.TextIOWrapper(f, encoding='utf-8', errors='ignore')
+                for _ in range(200):
+                    try:
+                        line = next(stream)
+                    except StopIteration:
+                        break
+                    head_lines.append(line.rstrip('\n'))
+            return jsonify({'success': True, 'token': token, 'gcode_name': gname, 'gcode_head': head_lines})
+
+        # 2) Raw G-code(.gcode / .gcode.gz) 처리
+        if lower.endswith('.gcode.gz'):
+            open_stream = lambda p: gzip.open(p, 'rt', encoding='utf-8', errors='ignore')
+        else:
+            open_stream = lambda p: open(p, 'r', encoding='utf-8', errors='ignore')
+
+        with open_stream(path) as stream:
             for _ in range(200):
-                try:
-                    line = next(stream)
-                except StopIteration:
+                line = stream.readline()
+                if not line:
                     break
                 head_lines.append(line.rstrip('\n'))
 
-            return jsonify({
-                'success': True,
-                'token': token,
-                'gcode_name': gname,
-                'gcode_head': head_lines
-            })
+        return jsonify({'success': True, 'token': token, 'gcode_name': token, 'gcode_head': head_lines})
     except Exception as e:
-        logger.error(f"UFP 프리뷰 오류: {e}")
+        logger.error(f"UFP/G-code 프리뷰 오류: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
