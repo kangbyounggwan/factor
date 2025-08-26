@@ -69,8 +69,6 @@ class FactorClient:
         self.error_count = 0
         self.last_heartbeat = time.time()
         self.connected = False
-        # 최근 하트비트 소스 타임라인(최대 10건)
-        self._hb_timeline: List[Dict[str, Any]] = []
         
         # 스레드 및 큐
         self.data_queue = Queue()
@@ -127,14 +125,6 @@ class FactorClient:
                 callback(data)
             except Exception as e:
                 self.logger.error(f"콜백 실행 오류 ({event_type}): {e}")
-
-    def _record_hb(self, src: str, meta: Dict[str, Any]):
-        try:
-            self._hb_timeline.append({'ts': time.time(), 'src': src, 'meta': meta})
-            if len(self._hb_timeline) > 10:
-                self._hb_timeline = self._hb_timeline[-10:]
-        except Exception:
-            pass
     
     def start(self):
         """클라이언트 시작"""
@@ -314,27 +304,6 @@ class FactorClient:
                         # 스레드 상태 확인
                         active_threads = [t for t in self.polling_threads if t.is_alive()]
                         self.logger.error(f"  - 활성 폴링 스레드: {len(active_threads)}/{len(self.polling_threads)}")
-                        # 최근 하트비트 타임라인 덤프
-                        try:
-                            self.logger.error("  - 최근 하트비트 이벤트:")
-                            for ev in self._hb_timeline[-10:]:
-                                ts = datetime.fromtimestamp(ev.get('ts', 0))
-                                self.logger.error(f"    * {ts} {ev.get('src')} {ev.get('meta')}")
-                        except Exception:
-                            pass
-                        # 폴링 스레드 재시작 시도
-                        try:
-                            if len(active_threads) < len(self.polling_threads):
-                                self.logger.warning("폴링 스레드 재시작 시도")
-                                self._start_polling_threads()
-                        except Exception:
-                            pass
-                        # 핑 전송(M105)
-                        try:
-                            if self.printer_comm:
-                                self.printer_comm.send_command("M105")
-                        except Exception:
-                            pass
                         
                         self._handle_error("heartbeat_timeout")
                     
@@ -477,13 +446,7 @@ class FactorClient:
         old_state_name = old_state.state if old_state else "None"
         
         self.printer_status = status
-        # 연결 플래그를 상태에 맞춰 동기화
-        try:
-            self.connected = bool(status.flags.get('connected', status.state != 'disconnected'))
-        except Exception:
-            self.connected = (status.state != 'disconnected')
         self.last_heartbeat = time.time()
-        self._record_hb('state_change', {'state': status.state, 'flags': status.flags})
         
         # 하트비트 업데이트 상세 로깅
         self.logger.debug(f"하트비트 업데이트 - 프린터 상태 변경: {old_state_name} → {status.state}")
@@ -497,11 +460,6 @@ class FactorClient:
         """온도 업데이트 콜백"""
         # 온도 업데이트 시에도 하트비트 업데이트
         self.last_heartbeat = time.time()
-        try:
-            keys = list((temp_info.tool or {}).keys())
-        except Exception:
-            keys = []
-        self._record_hb('temperature', {'tool_keys': keys})
         self.logger.debug(f"하트비트 업데이트 - 온도 업데이트")
         
         self._trigger_callback('on_temperature_update', temp_info)
@@ -511,7 +469,6 @@ class FactorClient:
         """위치 업데이트 콜백"""
         # 위치 업데이트 시에도 하트비트 업데이트
         self.last_heartbeat = time.time()
-        self._record_hb('position', {'x': position.x, 'y': position.y, 'z': position.z})
         self.logger.debug(f"하트비트 업데이트 - 위치 업데이트")
         
         self.position_data = position
@@ -522,11 +479,6 @@ class FactorClient:
         """G-code 응답 콜백"""
         # G-code 응답 시에도 하트비트 업데이트
         self.last_heartbeat = time.time()
-        try:
-            preview = (response.response or '')[:60]
-        except Exception:
-            preview = ''
-        self._record_hb('gcode_response', {'preview': preview})
         self.logger.debug(f"하트비트 업데이트 - G-code 응답")
         
         self._trigger_callback('on_gcode_response', response)
@@ -541,7 +493,7 @@ class FactorClient:
     # 외부 인터페이스 메서드들
     def get_printer_status(self) -> PrinterStatus:
         """프린터 상태 반환"""
-        if self.is_connected() and self.printer_comm:
+        if self.connected and self.printer_comm:
             return self.printer_comm.get_printer_status()
         else:
             return PrinterStatus(
@@ -552,14 +504,14 @@ class FactorClient:
     
     def get_temperature_info(self) -> TemperatureInfo:
         """온도 정보 반환"""
-        if self.is_connected() and self.printer_comm:
+        if self.connected and self.printer_comm:
             return self.printer_comm.get_temperature_info()
         else:
             return TemperatureInfo(tool={})
     
     def get_position(self) -> Position:
         """위치 정보 반환"""
-        if self.is_connected() and self.printer_comm:
+        if self.connected and self.printer_comm:
             return self.printer_comm.get_position()
         else:
             return Position(0, 0, 0, 0)
@@ -579,7 +531,7 @@ class FactorClient:
     
     def get_firmware_info(self) -> FirmwareInfo:
         """펌웨어 정보 반환"""
-        if self.is_connected() and self.printer_comm:
+        if self.connected and self.printer_comm:
             return self.printer_comm.get_firmware_info()
         else:
             return FirmwareInfo()
@@ -594,12 +546,12 @@ class FactorClient:
         return self.camera_info
     
     def is_connected(self) -> bool:
-        """연결 상태 확인(실제 통신 객체 상태 우선)"""
-        return bool(self.printer_comm and self.printer_comm.connected)
+        """연결 상태 확인"""
+        return bool(self.connected and self.printer_comm and self.printer_comm.connected)
     
     def send_gcode(self, command: str) -> bool:
         """G-code 명령 전송"""
-        if not self.is_connected() or not self.printer_comm:
+        if not self.connected or not self.printer_comm:
             self.logger.warning("프린터가 연결되지 않음")
             return False
         
@@ -611,19 +563,19 @@ class FactorClient:
     
     def home_axes(self, axes: str = ""):
         """축 홈 이동"""
-        if self.is_connected() and self.printer_comm:
+        if self.connected and self.printer_comm:
             self.printer_comm.home_axes(axes)
     
     def set_temperature(self, tool: int = 0, temp: float = 0):
         """온도 설정"""
-        if self.is_connected() and self.printer_comm:
+        if self.connected and self.printer_comm:
             self.printer_comm.set_temperature(tool, temp)
     
     def move_axis(self, x: Optional[float] = None, y: Optional[float] = None, 
                   z: Optional[float] = None, e: Optional[float] = None, 
                   feedrate: Optional[float] = None):
         """축 이동"""
-        if self.is_connected() and self.printer_comm:
+        if self.connected and self.printer_comm:
             # None 값들을 기본값으로 변환
             x_val = x if x is not None else 0.0
             y_val = y if y is not None else 0.0

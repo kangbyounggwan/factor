@@ -65,17 +65,13 @@ class DataCollectionModule:
         if self._parse_firmware_info(line):
             return
 
+        if pc.error_pattern.search(line):
+            pc.logger.error(f"프린터 오류: {line}")
+            pc._set_state(pc.PrinterState.ERROR)
+            pc._trigger_callback('on_error', line)
 
         if pc.ok_pattern.match(line):
-            # 동기 모드 소프트 윈도우 카운터 감소(연속 전송 페이싱)
-            try:
-                if hasattr(pc, 'control') and pc.control and hasattr(pc.control, '_outstanding'):
-                    with pc.control._lock:
-                        if pc.control._outstanding > 0:
-                            pc.control._outstanding -= 1
-            except Exception:
-                pass
-            # 계속 진행
+            pass
 
         # 로컬 응답 객체(shim)로 콜백 전달 (순환참조 방지)
         @dataclass

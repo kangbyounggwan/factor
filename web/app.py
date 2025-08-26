@@ -169,8 +169,8 @@ def create_app(config_manager: ConfigManager, factor_client=None):
         # 블로킹이 필요한 명령 위주 + 주기적으로 한 번 대기
         if re.match(r"^(M109|M190|M400|G4|G28|G29|M112)\b", line, re.IGNORECASE):
             return True
-        # 100줄마다 한 번은 ok 대기 (버퍼 보호)
-        if sent_idx > 0 and (sent_idx % 100 == 0):
+        # 25줄마다 한 번은 ok 대기 (버퍼 보호)
+        if sent_idx > 0 and (sent_idx % 25 == 0):
             return True
         return False
 
@@ -448,10 +448,10 @@ def create_app(config_manager: ConfigManager, factor_client=None):
                 pass
             low = file_path.lower()
             if low.endswith('.ufp'):
-                total = _stream_ufp_gcode(pc, file_path, wait_ok=False, send_delay=0.0)
+                total = _stream_ufp_gcode(pc, file_path, wait_ok=True, send_delay=0.0)
                 app.logger.info(f'UFP 인쇄 전송 완료: {total} lines')
             elif low.endswith('.gcode') or low.endswith('.gcode.gz'):
-                total = _stream_gcode_file(pc, file_path, wait_ok=False, send_delay=0.0)
+                total = _stream_gcode_file(pc, file_path, wait_ok=True, send_delay=0.0)
                 app.logger.info(f'G-code 인쇄 전송 완료: {total} lines')
             else:
                 app.logger.error('지원하지 않는 파일 형식입니다.')

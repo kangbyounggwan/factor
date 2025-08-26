@@ -481,29 +481,6 @@
                     <button class="btn" onclick="startPrintFromUploaded()">업로드 & 인쇄 시작</button>
                     <small style="color:#666;display:block;margin-top:8px;">진행 상황은 우측 시스템 로그에서 확인하세요.</small>
                 </div>
-
-                <div class="control-panel">
-                    <h3>SD 카드 업로드 / 인쇄</h3>
-                    <div class="control-group">
-                        <label for="sd-file">파일 선택 (.gcode, .gcode.gz)</label>
-                        <input type="file" id="sd-file" accept=".gcode,.gcode.gz">
-                    </div>
-                    <div class="control-group">
-                        <label for="sd-name">SD 파일명(8.3, 예: JOB.GCO)</label>
-                        <input type="text" id="sd-name" placeholder="자동 생성됨">
-                    </div>
-                    <button class="btn" onclick="sdUploadOnly()">SD에 업로드</button>
-                    <button class="btn" onclick="sdUploadAndPrint()">SD 업로드 & 인쇄</button>
-                    <div style="display:flex; gap:8px; margin-top:8px;">
-                        <button class="btn" onclick="sdList()">SD 목록</button>
-                        <button class="btn" onclick="sdProgress()">SD 진행률</button>
-                    </div>
-                    <div style="display:flex; gap:8px; margin-top:8px;">
-                        <button class="btn" onclick="sdInit()">SD 초기화(M21)</button>
-                        <button class="btn" onclick="sdRelease()">SD 언마운트(M22)</button>
-                    </div>
-                    <pre id="sd-result" style="height:160px; overflow:auto; background:#111827; color:#e5e7eb; padding:8px; border-radius:8px; margin-top:8px;"></pre>
-                </div>
                 
                 <div class="log-section">
                     <h3>시스템 로그</h3>
@@ -524,9 +501,16 @@
         // 페이지 로드 시 초기화
         document.addEventListener('DOMContentLoaded', function() {
             loadStatus();
-            // 3초마다 상태 업데이트(연결 여부만 체크). 연결 전에는 다른 폴링은 수행하지 않음
+            loadLogs();
+            loadTxWindow();
+            
+            // 3초마다 상태 업데이트
             statusUpdateInterval = setInterval(loadStatus, 3000);
-            // 나머지 폴링은 연결 상태에서만 수행되도록 각 함수 내에서 가드 처리
+            phaseUpdateInterval = setInterval(loadPhase, 1000);
+            setInterval(loadTxWindow, 1000);
+            
+            // 2초마다 로그 업데이트 (진행 상황을 더 자주 표시)
+            setInterval(loadLogs, 2000);
         });
         
         // 페이지 언로드 시 인터벌 정리
@@ -581,7 +565,6 @@
 
         // 송신 윈도우 스냅샷 로드
         async function loadTxWindow() {
-            if (!currentStatus || !currentStatus.connected) return;
             try {
                 const res = await fetch('/api/printer/tx-window');
                 const data = await res.json();
@@ -707,7 +690,6 @@
 
         // 단계(Phase) 폴링/표시
         async function loadPhase() {
-            if (!currentStatus || !currentStatus.connected) return;
             try {
                 const res = await fetch('/api/printer/phase');
                 const data = await res.json();
@@ -783,7 +765,6 @@
         
         // 로그 불러오기
         async function loadLogs() {
-            if (!currentStatus || !currentStatus.connected) return;
             try {
                 const response = await fetch('/api/logs');
                 const data = await response.json();
@@ -1051,118 +1032,6 @@
                 }
             } catch (e) {
                 addLogEntry('인쇄 시작 오류: ' + e.message, 'error');
-            }
-        }
-
-        // ===== SD 카드 업로드/인쇄 =====
-        function _buildSdForm(fileInputId) {
-            const input = document.getElementById(fileInputId);
-            if (!input.files || input.files.length === 0) {
-                addLogEntry('SD 업로드할 파일을 선택하세요.', 'warning');
-                return null;
-            }
-            const file = input.files[0];
-            const form = new FormData();
-            form.append('file', file);
-            const name = (document.getElementById('sd-name').value || '').trim();
-            if (name) form.append('sd_name', name);
-            return form;
-        }
-
-        async function sdUploadOnly() {
-            const form = _buildSdForm('sd-file');
-            if (!form) return;
-            try {
-                addLogEntry('SD업로드시작', 'info');
-                const res = await fetch('/api/sd/upload', { method: 'POST', body: form });
-                const data = await res.json();
-                if (res.ok && data.success) {
-                    addLogEntry('업로드완료', 'info');
-                    document.getElementById('sd-result').textContent = `업로드 완료: ${JSON.stringify(data, null, 2)}`;
-                } else {
-                    addLogEntry('SD 업로드 실패: ' + (data.error || res.statusText), 'error');
-                }
-            } catch (e) {
-                addLogEntry('SD 업로드 오류: ' + e.message, 'error');
-            }
-        }
-
-        async function sdUploadAndPrint() {
-            const form = _buildSdForm('sd-file');
-            if (!form) return;
-            try {
-                addLogEntry('SD업로드시작', 'info');
-                const res = await fetch('/api/sd/print', { method: 'POST', body: form });
-                const data = await res.json();
-                if (res.ok && data.success) {
-                    addLogEntry('업로드완료', 'info');
-                    document.getElementById('sd-result').textContent = `인쇄 시작: ${JSON.stringify(data, null, 2)}`;
-                } else {
-                    addLogEntry('SD 업로드 & 인쇄 실패: ' + (data.error || res.statusText), 'error');
-                }
-            } catch (e) {
-                addLogEntry('SD 업로드 & 인쇄 오류: ' + e.message, 'error');
-            }
-        }
-
-        async function sdList() {
-            try {
-                const res = await fetch('/api/sd/list');
-                const data = await res.json();
-                if (res.ok && data.success) {
-                    const files = (data.files || []).map(f => `${f.is_dir ? '[DIR] ' : ''}${f.name}${f.size!=null?(' '+f.size):''}`).join('\n');
-                    const body = files || data.raw || '(빈 목록)';
-                    document.getElementById('sd-result').textContent = body;
-                    addLogEntry('SD 목록 조회 완료', 'info');
-                } else {
-                    addLogEntry('SD 목록 조회 실패: ' + (data.error || res.statusText), 'error');
-                }
-            } catch (e) {
-                addLogEntry('SD 목록 조회 오류: ' + e.message, 'error');
-            }
-        }
-
-        async function sdProgress() {
-            try {
-                const res = await fetch('/api/sd/progress');
-                const data = await res.json();
-                if (res.ok && data.success) {
-                    const pct = (data.percent != null) ? `${data.percent}%` : '—';
-                    document.getElementById('sd-result').textContent = `RAW: ${data.raw}\nPCT: ${pct}`;
-                    addLogEntry('SD 진행률 갱신', 'info');
-                } else {
-                    addLogEntry('SD 진행률 실패: ' + (data.error || res.statusText), 'error');
-                }
-            } catch (e) {
-                addLogEntry('SD 진행률 오류: ' + e.message, 'error');
-            }
-        }
-
-        async function sdInit() {
-            try {
-                const res = await fetch('/api/sd/init', { method: 'POST' });
-                const data = await res.json();
-                if (res.ok && data.success) {
-                    addLogEntry('SD 초기화 완료(M21)', 'info');
-                } else {
-                    addLogEntry('SD 초기화 실패: ' + (data.error || res.statusText), 'error');
-                }
-            } catch (e) {
-                addLogEntry('SD 초기화 오류: ' + e.message, 'error');
-            }
-        }
-
-        async function sdRelease() {
-            try {
-                const res = await fetch('/api/sd/release', { method: 'POST' });
-                const data = await res.json();
-                if (res.ok && data.success) {
-                    addLogEntry('SD 언마운트 완료(M22)', 'info');
-                } else {
-                    addLogEntry('SD 언마운트 실패: ' + (data.error || res.statusText), 'error');
-                }
-            } catch (e) {
-                addLogEntry('SD 언마운트 오류: ' + e.message, 'error');
             }
         }
     </script>
