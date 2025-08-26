@@ -610,8 +610,8 @@ def upload_sd_file():
                         if not line:
                             _t.sleep(0.01); continue
                         s = line.decode('utf-8', errors='ignore').strip().lower()
-                        # 마를린: "Writing to file:" 또는 "File opened"
-                        if ('writing to file' in s) or ('file opened' in s) or s.startswith('ok'):
+                        # 마를린: "Writing to file:" 또는 "File opened" 만 진입 확정(ok만으로는 불충분)
+                        if ('writing to file' in s) or ('file opened' in s):
                             engaged = True
                             break
                     if not engaged:
@@ -752,10 +752,26 @@ def upload_sd_file():
         except Exception:
             pass
 
-        # 목록 갱신 시도
+        # 목록 갱신 및 최종 검증(파일 크기 확인)
         try:
             pc.send_command_and_wait('M20', timeout=3.0)
-            time.sleep(0.1)
+            time.sleep(0.2)
+            info = getattr(pc, 'sd_card_info', {}) or {}
+            files = info.get('files', []) or []
+            target_name = (remote_name or '').strip()
+            found_size = None
+            # 이름 매칭은 대소문자 무시 및 8.3/롱네임 모두 대비
+            tn_lower = target_name.lower()
+            for f in files:
+                try:
+                    nm = str(f.get('name', ''))
+                    if nm and nm.lower().endswith(tn_lower) or nm.lower() == tn_lower:
+                        found_size = f.get('size', None)
+                        break
+                except Exception:
+                    pass
+            if found_size is not None and int(found_size) <= 0:
+                return jsonify({'success': False, 'error': 'upload appears empty on SD (0 bytes). Please retry.'}), 500
         except Exception:
             pass
 
