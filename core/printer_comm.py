@@ -300,12 +300,12 @@ class PrinterCommunicator:
                     continue
                 
                 if self.serial_conn and self.serial_conn.is_open:
-                    # 명령 전송 (LF 사용)
-                    command_line = f"{command}\n"
-                    self.serial_conn.write(command_line.encode('utf-8'))
-                    self.serial_conn.flush()
-                    
-                    self.logger.debug(f"[TX] {command!r}")
+                    # 명령 전송 (LF 사용) – 업로드 등 동기 작업과 충돌 방지 위해 시리얼 락 사용
+                    with self.serial_lock:
+                        command_line = f"{command}\n"
+                        self.serial_conn.write(command_line.encode('utf-8'))
+                        self.serial_conn.flush()
+                        self.logger.debug(f"[TX] {command!r}")
                 
                 self.command_queue.task_done()
                 
