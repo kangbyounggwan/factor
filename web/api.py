@@ -427,37 +427,81 @@ def upload_sd_file():
         if not remote_name:
             return jsonify({'success': False, 'error': 'invalid remote name'}), 400
 
-        # 직접 시리얼에 동기 기록하여 큐 선행/경합 방지
-        import io as _io
+        # 직접 시리얼에 동기 기록(바이너리 청크)하여 CPU 과점유/경합 방지
         import time as _t
         total_lines = 0
         total_bytes = 0
         if not pc.connected or not (pc.serial_conn and pc.serial_conn.is_open):
             return jsonify({'success': False, 'error': 'printer not connected'}), 503
-        text_stream = _io.TextIOWrapper(upfile.stream, encoding='utf-8', errors='ignore')
+
+        # 업로드 스트림을 바이너리로 읽기
+        up_stream = upfile.stream  # Werkzeug FileStorage stream (binary)
 
         with pc.serial_lock:
             pc.sync_mode = True
             try:
                 # SD init
-                pc.serial_conn.write(b"M21\n"); pc.serial_conn.flush()
-                _t.sleep(0.05)
+                pc.serial_conn.write(b"M21\n"); pc.serial_conn.flush(); _t.sleep(0.05)
                 # Begin write
-                pc.serial_conn.write((f"M28 {remote_name}\n").encode('utf-8')); pc.serial_conn.flush()
-                _t.sleep(0.05)
-                # Stream file
-                for i, raw in enumerate(text_stream):
-                    line = raw.rstrip('\r\n') + "\n"
-                    pc.serial_conn.write(line.encode('utf-8', errors='ignore'))
-                    total_lines += 1
-                    total_bytes += len(raw.encode('utf-8', errors='ignore'))
-                    if (i % 400) == 0:
+                pc.serial_conn.write((f"M28 {remote_name}\n").encode('utf-8'))
+                pc.serial_conn.flush(); _t.sleep(0.05)
+
+                # Handshake: M28 진입 확인 (에코/안내 라인 대기)
+                try:
+                    end = _t.time() + 5.0
+                    engaged = False
+                    while _t.time() < end:
+                        line = pc.serial_conn.readline()
+                        if not line:
+                            _t.sleep(0.01); continue
+                        s = line.decode('utf-8', errors='ignore').strip().lower()
+                        # 마를린: "Writing to file:" 또는 "File opened"
+                        if ('writing to file' in s) or ('file opened' in s) or s.startswith('ok'):
+                            engaged = True
+                            break
+                    if not engaged:
+                        # 진입 실패로 간주
+                        pc.serial_conn.write(b"M29\n"); pc.serial_conn.flush()
+                        pc.sync_mode = False
+                        return jsonify({'success': False, 'error': 'failed to enter SD write mode (M28)'}), 500
+                except Exception:
+                    pass
+
+                # 64KB 청크로 전송, 256KB마다 flush + 짧은 sleep
+                bytes_since_flush = 0
+                CHUNK = 65536
+                while True:
+                    chunk = up_stream.read(CHUNK)
+                    if not chunk:
+                        break
+                    # 라인 수는 '\n' 개수로 계산(로그용)
+                    try:
+                        total_lines += chunk.count(b"\n")
+                    except Exception:
+                        pass
+                    pc.serial_conn.write(chunk)
+                    total_bytes += len(chunk)
+                    bytes_since_flush += len(chunk)
+                    if bytes_since_flush >= 262144:  # 256KB
                         pc.serial_conn.flush()
-                        # 약간의 휴식으로 시리얼 버퍼 보호
-                        _t.sleep(0.002)
+                        bytes_since_flush = 0
+                        _t.sleep(0.003)
+
                 pc.serial_conn.flush()
                 # End write
                 pc.serial_conn.write(b"M29\n"); pc.serial_conn.flush()
+                # Handshake: 저장 완료 응답 대기
+                try:
+                    end2 = _t.time() + 5.0
+                    while _t.time() < end2:
+                        line = pc.serial_conn.readline()
+                        if not line:
+                            _t.sleep(0.01); continue
+                        s = line.decode('utf-8', errors='ignore').strip().lower()
+                        if ('done saving file' in s) or s.startswith('ok'):
+                            break
+                except Exception:
+                    pass
                 end_ok = True
             finally:
                 pc.sync_mode = False
