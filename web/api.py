@@ -588,8 +588,21 @@ def upload_sd_file():
             except Exception:
                 pass
 
-        # 업로드 전 프린터 유휴 대기(M400)
+        # 업로드 전 프린터 유휴 대기(M400) - 시작점에서 전면 차단/폴링 일시정지/입력버퍼 정리, RX 일시정지
         try:
+            try:
+                setattr(pc, 'tx_inhibit', True)
+            except Exception:
+                pass
+            try:
+                setattr(pc, 'rx_paused', True)
+            except Exception:
+                pass
+            try:
+                if pc.serial_conn and pc.serial_conn.is_open:
+                    pc.serial_conn.reset_input_buffer()
+            except Exception:
+                pass
             pc.send_command_and_wait('M400', timeout=5.0)
         except Exception:
             pass
@@ -598,7 +611,20 @@ def upload_sd_file():
             # 핸드셰이크 구간에서는 RX 워커 레이스를 피하기 위해 잠시 동기 모드로 전환
             pc.sync_mode = True
             try:
-                # Begin write (M21 없이 바로 진입, 실패 시 에러 반환)
+                # 절충: 업로드 시작 전 혹시 모를 SD 인쇄/오토스타트 중단 → SD 초기화 → 진입
+                try:
+                    pc.serial_conn.write(b"M25\n"); pc.serial_conn.flush(); _t.sleep(0.05)  # SD print pause
+                except Exception:
+                    pass
+                try:
+                    pc.serial_conn.write(b"M524\n"); pc.serial_conn.flush(); _t.sleep(0.05)  # Abort SD print
+                except Exception:
+                    pass
+                try:
+                    pc.serial_conn.write(b"M21\n"); pc.serial_conn.flush(); _t.sleep(0.15)  # SD init (오토스타트 회피는 M524 선행)
+                except Exception:
+                    pass
+                # Begin write (진입)
                 pc.serial_conn.write((f"M28 {remote_name}\n").encode('utf-8'))
                 pc.serial_conn.flush(); _t.sleep(0.05)
 
@@ -611,8 +637,8 @@ def upload_sd_file():
                         if not line:
                             _t.sleep(0.01); continue
                         s = line.decode('utf-8', errors='ignore').strip().lower()
-                        # 마를린: "Writing to file:" 또는 "File opened" 만 진입 확정(ok만으로는 불충분)
-                        if ('writing to file' in s) or ('file opened' in s):
+                        # 마를린: "Writing to file:"/"File opened"/"Now fresh file:" 만 진입 확정(ok만으로는 불충분)
+                        if ('writing to file' in s) or ('file opened' in s) or ('now fresh file' in s):
                             engaged = True
                             break
                     if not engaged:
@@ -625,6 +651,10 @@ def upload_sd_file():
 
                 # 진입 성공 시 RX 워커 재가동( busy:/ok 처리를 위해 )
                 pc.sync_mode = False
+                try:
+                    setattr(pc, 'rx_paused', False)
+                except Exception:
+                    pass
 
                 # 8KB 청크로 전송, 64KB마다 flush + 짧은 sleep (버퍼 압박/지연 완화)
                 bytes_since_flush = 0

@@ -249,6 +249,13 @@ class PrinterCommunicator:
         
         while self.running and self.connected:
             try:
+                # 업로드 핸드셰이크 등에서 RX를 일시 정지할 수 있도록 플래그 확인
+                try:
+                    if getattr(self, 'rx_paused', False):
+                        time.sleep(0.01)
+                        continue
+                except Exception:
+                    pass
                 if self.sync_mode:
                     time.sleep(0.01)
                     continue
