@@ -477,6 +477,11 @@ class FactorClient:
         old_state_name = old_state.state if old_state else "None"
         
         self.printer_status = status
+        # 연결 플래그를 상태에 맞춰 동기화
+        try:
+            self.connected = bool(status.flags.get('connected', status.state != 'disconnected'))
+        except Exception:
+            self.connected = (status.state != 'disconnected')
         self.last_heartbeat = time.time()
         self._record_hb('state_change', {'state': status.state, 'flags': status.flags})
         
@@ -536,7 +541,7 @@ class FactorClient:
     # 외부 인터페이스 메서드들
     def get_printer_status(self) -> PrinterStatus:
         """프린터 상태 반환"""
-        if self.connected and self.printer_comm:
+        if self.is_connected() and self.printer_comm:
             return self.printer_comm.get_printer_status()
         else:
             return PrinterStatus(
@@ -547,14 +552,14 @@ class FactorClient:
     
     def get_temperature_info(self) -> TemperatureInfo:
         """온도 정보 반환"""
-        if self.connected and self.printer_comm:
+        if self.is_connected() and self.printer_comm:
             return self.printer_comm.get_temperature_info()
         else:
             return TemperatureInfo(tool={})
     
     def get_position(self) -> Position:
         """위치 정보 반환"""
-        if self.connected and self.printer_comm:
+        if self.is_connected() and self.printer_comm:
             return self.printer_comm.get_position()
         else:
             return Position(0, 0, 0, 0)
@@ -574,7 +579,7 @@ class FactorClient:
     
     def get_firmware_info(self) -> FirmwareInfo:
         """펌웨어 정보 반환"""
-        if self.connected and self.printer_comm:
+        if self.is_connected() and self.printer_comm:
             return self.printer_comm.get_firmware_info()
         else:
             return FirmwareInfo()
@@ -589,12 +594,12 @@ class FactorClient:
         return self.camera_info
     
     def is_connected(self) -> bool:
-        """연결 상태 확인"""
-        return bool(self.connected and self.printer_comm and self.printer_comm.connected)
+        """연결 상태 확인(실제 통신 객체 상태 우선)"""
+        return bool(self.printer_comm and self.printer_comm.connected)
     
     def send_gcode(self, command: str) -> bool:
         """G-code 명령 전송"""
-        if not self.connected or not self.printer_comm:
+        if not self.is_connected() or not self.printer_comm:
             self.logger.warning("프린터가 연결되지 않음")
             return False
         
@@ -606,19 +611,19 @@ class FactorClient:
     
     def home_axes(self, axes: str = ""):
         """축 홈 이동"""
-        if self.connected and self.printer_comm:
+        if self.is_connected() and self.printer_comm:
             self.printer_comm.home_axes(axes)
     
     def set_temperature(self, tool: int = 0, temp: float = 0):
         """온도 설정"""
-        if self.connected and self.printer_comm:
+        if self.is_connected() and self.printer_comm:
             self.printer_comm.set_temperature(tool, temp)
     
     def move_axis(self, x: Optional[float] = None, y: Optional[float] = None, 
                   z: Optional[float] = None, e: Optional[float] = None, 
                   feedrate: Optional[float] = None):
         """축 이동"""
-        if self.connected and self.printer_comm:
+        if self.is_connected() and self.printer_comm:
             # None 값들을 기본값으로 변환
             x_val = x if x is not None else 0.0
             y_val = y if y is not None else 0.0

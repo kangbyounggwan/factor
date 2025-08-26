@@ -502,7 +502,18 @@ class PrinterCommunicator:
         try:
             # 동기 모드에서는 목록 전체를 수집한다(OK 또는 'End file list'까지)
             # 목록 요청 전 잔여 버퍼를 비우고(타 명령 응답 섞임 방지), 전체 수집
-            return self.control.send_command_and_wait("M20", timeout=8.0, collect=True, flush_before=True) or ""
+            raw = self.control.send_command_and_wait("M20", timeout=8.0, collect=True, flush_before=True) or ""
+            low = raw.lower()
+            if 'no checksum with line number' in low:
+                # 체크섬 모드로 전환된 상태 → 체크섬 포함 M110으로 리셋 후 재시도
+                try:
+                    self.logger.warning("M20 중 체크섬 오류 감지 → M110 리셋 후 재시도")
+                    self.control._auto_reset_line_number_mode()
+                    time.sleep(0.1)
+                except Exception:
+                    pass
+                raw = self.control.send_command_and_wait("M20", timeout=8.0, collect=True, flush_before=True) or ""
+            return raw
         except Exception as e:
             self.logger.error(f"SD 목록 조회 실패: {e}")
             return ""
