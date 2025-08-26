@@ -186,7 +186,7 @@ class ControlModule:
             pc.command_queue.put(command)
         return True
 
-    def send_command_and_wait(self, command: str, timeout: float = 8.0, collect: bool = False):
+    def send_command_and_wait(self, command: str, timeout: float = 8.0, collect: bool = False, flush_before: bool = False):
         """
         동기 전송 후 ack/의미 있는 응답을 대기
 
@@ -227,6 +227,17 @@ class ControlModule:
             pc.sync_mode = True
             try:
                 pc._last_temp_line = None; pc._last_pos_line = None; pc.last_response = None
+                # 필요 시 입력 버퍼 비우기(이전 폴링 응답 제거)
+                if flush_before:
+                    try:
+                        if hasattr(pc.serial_conn, 'reset_input_buffer'):
+                            pc.serial_conn.reset_input_buffer()
+                        else:
+                            if pc.serial_conn.in_waiting:
+                                pc.serial_conn.read(pc.serial_conn.in_waiting)
+                    except Exception:
+                        pass
+
                 pc.logger.debug(f"[SYNC_TX] {command!r}")
                 pc.serial_conn.write(f"{command}\n".encode("utf-8"))
                 pc.serial_conn.flush()
@@ -531,6 +542,35 @@ class ControlModule:
                     pass
 
         pc.tx_bridge = _Bridge(in_q, out_q, proc, _on_rx, _on_error)
+
+    # ===== 자동 복구: 체크섬 모드 리셋 =====
+    def _auto_reset_line_number_mode(self):
+        """프린터가 'No Checksum with line number'를 보고할 때 체크섬 포함 M110을 전송"""
+        try:
+            # 라인 번호 + 체크섬 구성
+            line = "N0 M110"
+            cs = 0
+            for ch in line:
+                cs ^= ord(ch)
+            cmd = f"{line}*{cs & 0xFF}"
+            # 동기 경로로 즉시 전송
+            pc = self.pc
+            if pc.tx_bridge:
+                # 브리지 경로에서는 우선순위 송신 후 ack 대기
+                try:
+                    msg_id = pc.tx_bridge.enqueue(cmd, barrier=True)
+                    pc.tx_bridge.wait_ack(msg_id, timeout=2.0)
+                except Exception:
+                    pass
+            else:
+                try:
+                    with pc.serial_lock:
+                        pc.serial_conn.write(f"{cmd}\n".encode("utf-8"))
+                        pc.serial_conn.flush()
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def get_tx_window_snapshot(self):
         """전송 윈도우 스냅샷 반환(API용)"""
