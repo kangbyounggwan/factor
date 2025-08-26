@@ -312,6 +312,30 @@ class ControlModule:
         except Exception:
             return False
 
+    def clear_command_queue(self) -> bool:
+        """송신 대기 큐를 즉시 비움(인플라이트는 건드리지 않음)
+
+        - 사용처: 업로드/에러 후 잔여 명령 제거
+        """
+        pc = self.pc
+        try:
+            # 내부 큐 비우기
+            try:
+                while True:
+                    pc.command_queue.get_nowait()
+            except Exception:
+                pass
+            # 시리얼 입력 버퍼도 비움(남은 ok/busy 등)
+            try:
+                if pc.serial_conn and pc.serial_conn.is_open:
+                    with pc.serial_lock:
+                        pc.serial_conn.reset_input_buffer()
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return False
+
 
 # ====== 단계 추적기 구현 ======
 class _PrintPhase(Enum):

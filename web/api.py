@@ -436,6 +436,7 @@ def upload_sd_file():
 
         # 업로드 스트림을 바이너리로 읽기
         up_stream = upfile.stream  # Werkzeug FileStorage stream (binary)
+        temp_path = None  # 사이즈 추정 실패 시 임시 파일 경로
         # 총 크기/총 청크 수 추정
         total_target = None
         try:
@@ -450,6 +451,33 @@ def upload_sd_file():
                 total_target = up_stream.tell()
                 up_stream.seek(cur, os.SEEK_SET)
             except Exception:
+                total_target = None
+        # 여전히 알 수 없으면 임시 파일로 저장 후 크기 산정
+        if total_target is None:
+            try:
+                import tempfile
+                tmp = tempfile.NamedTemporaryFile(delete=False)
+                temp_path = tmp.name
+                tmp.close()
+                try:
+                    try:
+                        up_stream.seek(0, os.SEEK_SET)
+                    except Exception:
+                        pass
+                    # werkzeug FileStorage는 save 지원
+                    upfile.save(temp_path)
+                except Exception:
+                    # 수동 복사
+                    with open(temp_path, 'wb') as _f:
+                        while True:
+                            data = up_stream.read(65536)
+                            if not data:
+                                break
+                            _f.write(data)
+                total_target = os.path.getsize(temp_path)
+                up_stream = open(temp_path, 'rb')
+            except Exception:
+                temp_path = None
                 total_target = None
 
         with pc.serial_lock:
@@ -488,9 +516,17 @@ def upload_sd_file():
                 sent_chunks = 0
                 total_chunks = (int((total_target + CHUNK - 1) / CHUNK) if total_target is not None else None)
                 try:
-                    logger.info(f"SD 업로드 시작: {remote_name} ({total_target if total_target is not None else '?'} bytes)")
+                    # 너무 잦은 로그는 journald/파일 로거에서 드롭될 수 있으므로 시작/주기/완료만 기록
+                    (current_app.logger if hasattr(current_app, 'logger') else logger).info(
+                        f"SD 업로드 시작: {remote_name} ({total_target if total_target is not None else '?'} bytes)"
+                    )
                 except Exception:
                     pass
+                # 진행 로그 주기 제한(바이트/시간)
+                LOG_INTERVAL_BYTES = 256 * 1024
+                LOG_INTERVAL_SEC = 1.0
+                bytes_since_log = 0
+                last_log_ts = _t.time()
                 while True:
                     chunk = up_stream.read(CHUNK)
                     if not chunk:
@@ -504,14 +540,24 @@ def upload_sd_file():
                     total_bytes += len(chunk)
                     bytes_since_flush += len(chunk)
                     sent_chunks += 1
-                    # 진행 로그(청크 기준)
-                    try:
-                        if total_chunks is not None:
-                            logger.info(f"SD 업로드 진행: {sent_chunks}/{total_chunks} 청크")
-                        else:
-                            logger.info(f"SD 업로드 진행: {sent_chunks} 청크 전송")
-                    except Exception:
-                        pass
+                    # 진행 로그(주기 제한)
+                    bytes_since_log += len(chunk)
+                    now_ts = _t.time()
+                    if (bytes_since_log >= LOG_INTERVAL_BYTES) or ((now_ts - last_log_ts) >= LOG_INTERVAL_SEC):
+                        try:
+                            if total_target is not None and total_target > 0:
+                                pct = (total_bytes / total_target) * 100.0
+                                (current_app.logger if hasattr(current_app, 'logger') else logger).info(
+                                    f"SD 업로드 진행: {total_bytes}/{total_target} bytes ({pct:.1f}%)"
+                                )
+                            else:
+                                (current_app.logger if hasattr(current_app, 'logger') else logger).info(
+                                    f"SD 업로드 진행: {sent_chunks} 청크 전송 ({total_bytes} bytes)"
+                                )
+                        except Exception:
+                            pass
+                        bytes_since_log = 0
+                        last_log_ts = now_ts
                     # 하트비트 갱신(업로드 중 타임아웃 방지)
                     try:
                         fc.last_heartbeat = time.time()
@@ -540,11 +586,27 @@ def upload_sd_file():
                     pass
                 end_ok = True
                 try:
-                    logger.info(f"SD 업로드 완료: {remote_name} ({total_bytes} bytes, {sent_chunks} 청크)")
+                    (current_app.logger if hasattr(current_app, 'logger') else logger).info(
+                        f"SD 업로드 완료: {remote_name} ({total_bytes} bytes, {sent_chunks} 청크)"
+                    )
                 except Exception:
                     pass
             finally:
                 pc.sync_mode = False
+
+        # 임시 파일 정리
+        try:
+            if temp_path:
+                try:
+                    up_stream.close()
+                except Exception:
+                    pass
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
         # 목록 갱신 시도
         try:
@@ -562,6 +624,21 @@ def upload_sd_file():
                 fc.printer_comm.send_command('M29')
         except Exception:
             pass
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@api_bp.route('/printer/queue/clear', methods=['POST'])
+def clear_printer_queue():
+    """송신 대기 큐 비우기(API)"""
+    try:
+        fc = current_app.factor_client
+        if not fc or not hasattr(fc, 'printer_comm'):
+            return jsonify({'success': False, 'error': 'Factor client not available'}), 503
+        pc = fc.printer_comm
+        ok = False
+        if hasattr(pc, 'clear_command_queue'):
+            ok = bool(pc.clear_command_queue())
+        return jsonify({'success': ok}) if ok else (jsonify({'success': False}), 500)
+    except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 @api_bp.route('/printer/tx-window', methods=['GET'])
 def get_tx_window():

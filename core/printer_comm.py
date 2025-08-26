@@ -495,6 +495,13 @@ class PrinterCommunicator:
         # 비동기 브리지에서는 배리어 명령으로 처리
         self.send_command("M112", priority=True)
         self._set_state(PrinterState.ERROR)
+
+    def clear_command_queue(self) -> bool:
+        """송신 대기 큐 비우기 래퍼"""
+        try:
+            return self.control.clear_command_queue()
+        except Exception:
+            return False
     
     def _parse_temperature_response(self, response: str):
         """온도 응답 파싱 (M105) - 통합된 파싱 사용"""
