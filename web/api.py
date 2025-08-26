@@ -5,13 +5,14 @@ Factor 클라이언트 데이터 접근용 API
 
 from flask import Blueprint, request, jsonify, current_app, Response # type: ignore
 import logging
-import json
 import logging
 import subprocess
 import re
+from pathlib import Path
 from typing import Dict, Any, List
 import time
 import os
+import tempfile
 
 api_bp = Blueprint('api', __name__)
 logger = logging.getLogger('api')
@@ -210,8 +211,7 @@ def reconnect_printer():
 
         # 잠시 대기 후 재연결 시도
         try:
-            import time as _t
-            _t.sleep(0.5)
+            time.sleep(0.5)
         except Exception:
             pass
 
@@ -330,9 +330,6 @@ def health_check():
 def get_logs():
     """최근 로그 반환"""
     try:
-        import os
-        from pathlib import Path
-        
         log_file = '/var/log/factor-client/factor-client.log'
         if not os.path.exists(log_file):
             return jsonify({'logs': []})
@@ -472,13 +469,11 @@ def upload_sd_file():
         # 원격 파일명
         name_override = (request.form.get('name') or '').strip()
         remote_name = name_override if name_override else upfile.filename
-        import re
         remote_name = re.sub(r'[^A-Za-z0-9._/\-]+', '_', remote_name).lstrip('/')
         if not remote_name:
             return jsonify({'success': False, 'error': 'invalid remote name'}), 400
 
         # 직접 시리얼에 동기 기록(바이너리 청크)하여 CPU 과점유/경합 방지
-        import time as _t
         total_lines = 0
         total_bytes = 0
         if not pc.connected or not (pc.serial_conn and pc.serial_conn.is_open):
@@ -505,7 +500,6 @@ def upload_sd_file():
         # 여전히 알 수 없으면 임시 파일로 저장 후 크기 산정
         if total_target is None:
             try:
-                import tempfile
                 tmp = tempfile.NamedTemporaryFile(delete=False)
                 temp_path = tmp.name
                 tmp.close()
@@ -531,7 +525,6 @@ def upload_sd_file():
                 total_target = None
 
         # 업로드 보호: 폴링 일시정지 + 잔여 큐 정리 + (선택) 임의 전송 차단
-        import time as _t
         orig_temp = getattr(fc, 'temp_poll_interval', 2.0)
         orig_pos = getattr(fc, 'position_poll_interval', 5.0)
         try:
@@ -542,7 +535,7 @@ def upload_sd_file():
         except Exception:
             pass
         try:
-            _t.sleep(0.15)  # 폴링 스레드가 긴 sleep으로 진입하게 유도
+            time.sleep(0.15)  # 폴링 스레드가 긴 sleep으로 진입하게 유도
         except Exception:
             pass
         try:
@@ -604,13 +597,53 @@ def upload_sd_file():
         except Exception:
             pass
 
+        # 시리얼 대기 헬퍼(업로드 루틴 내부에서만 사용)
+
+        def wait_for_regex(pattern: str, timeout: float = 5.0):
+            """패턴이 보이면 (True, matched_line), 아니면 (False, None)"""
+            ser = pc.serial_conn
+            try:
+                deadline = time.time() + float(timeout)
+                rx_ok   = re.compile(pattern, re.IGNORECASE)
+                rx_fail = re.compile(r"(open failed|no sd|error:)", re.IGNORECASE)
+                while time.time() < deadline:
+                    line = ser.readline()
+                    if not line:
+                        # 잔여 버퍼 비우기 (CR/LF 분리 고려)
+                        if ser.in_waiting:
+                            chunk = ser.read(ser.in_waiting).decode('utf-8','ignore')
+                            for part in chunk.replace('\r','\n').split('\n'):
+                                s = part.strip()
+                                if not s: continue
+                                if rx_fail.search(s): return False, s
+                                if rx_ok.search(s):   return True, s
+                        time.sleep(0.01)
+                        continue
+
+                    s = line.decode('utf-8','ignore').strip()
+                    if not s: 
+                        continue
+                    if rx_fail.search(s):
+                        return False, s
+                    if rx_ok.search(s):
+                        return True, s
+            except Exception:
+                pass
+            return False, None
+
+        def wait_ok(timeout: float = 5.0):
+            """ok 또는 done saving file 을 ok로 간주"""
+            ok, s = wait_for_regex(r"^(ok\b)|(^done saving file)", timeout)
+            return ok
+
+
         with pc.serial_lock:
             # 핸드셰이크 구간에서는 RX 워커 레이스를 피하기 위해 잠시 동기 모드로 전환
             pc.sync_mode = True
             try:
                 # 절충: 업로드 시작 전 혹시 모를 SD 인쇄/오토스타트 중단 → SD 초기화 → 진입
 
-                pc.serial_conn.write(b"M21\n"); pc.serial_conn.flush(); _t.sleep(0.1)
+                pc.serial_conn.write(b"M21\n"); pc.serial_conn.flush(); time.sleep(0.1)
                 pc.serial_conn.write(b"M27\n"); pc.serial_conn.flush()
                 if wait_for_regex(r'sd printing byte', timeout=1.0):
                     pc.serial_conn.write(b"M524\n"); pc.serial_conn.flush()
@@ -621,16 +654,16 @@ def upload_sd_file():
                     
                 # Begin write (진입)
                 pc.serial_conn.write((f"M28 {remote_name}\n").encode('utf-8'))
-                pc.serial_conn.flush(); _t.sleep(0.05)
+                pc.serial_conn.flush(); time.sleep(0.05)
 
                 # Handshake: M28 진입 확인 (에코/안내 라인 대기)
                 try:
-                    end = _t.time() + 5.0
+                    end = time.time() + 5.0
                     engaged = False
-                    while _t.time() < end:
+                    while time.time() < end:
                         line = pc.serial_conn.readline()
                         if not line:
-                            _t.sleep(0.01); continue
+                            time.sleep(0.01); continue
                         s = line.decode('utf-8', errors='ignore').strip().lower()
                         # 마를린: "Writing to file:"/"File opened"/"Now fresh file:" 만 진입 확정(ok만으로는 불충분)
                         if ('writing to file' in s) or ('file opened' in s) or ('now fresh file' in s):
@@ -667,7 +700,7 @@ def upload_sd_file():
                 LOG_INTERVAL_BYTES = 512 * 1024
                 LOG_INTERVAL_SEC = 1.0
                 bytes_since_log = 0
-                last_log_ts = _t.time()
+                last_log_ts = time.time()
                 while True:
                     chunk = up_stream.read(CHUNK)
                     if not chunk:
@@ -685,7 +718,7 @@ def upload_sd_file():
                     sent_chunks += 1
                     # 진행 로그(주기 제한)
                     bytes_since_log += len(chunk)
-                    now_ts = _t.time()
+                    now_ts = time.time()
                     if (bytes_since_log >= LOG_INTERVAL_BYTES) or ((now_ts - last_log_ts) >= LOG_INTERVAL_SEC):
                         try:
                             if total_target is not None and total_target > 0:
@@ -710,28 +743,28 @@ def upload_sd_file():
                     if bytes_since_flush >= 65536:  # 64KB
                         pc.serial_conn.flush()
                         bytes_since_flush = 0
-                        _t.sleep(0.002)
+                        time.sleep(0.002)
 
                 pc.serial_conn.flush()
                 # 장치가 마지막 바이트를 파일로 플러시할 수 있도록 잠시 대기 후 안전하게 M29 전송
                 try:
-                    _t.sleep(0.1)
+                    time.sleep(0.1)
                 except Exception:
                     pass
                 # End write (분리된 라인 보장을 위해 선행 개행 추가)
                 pc.serial_conn.write(b"\nM29\n"); pc.serial_conn.flush()
                 # M29 전송 후 500ms 대기(장치가 파일 닫기 처리할 여유)
                 try:
-                    _t.sleep(1.0)
+                    time.sleep(1.0)
                 except Exception:
                     pass
                 # Handshake: 저장 완료 응답 대기
                 try:
-                    end2 = _t.time() + 5.0
-                    while _t.time() < end2:
+                    end2 = time.time() + 5.0
+                    while time.time() < end2:
                         line = pc.serial_conn.readline()
                         if not line:
-                            _t.sleep(0.01); continue
+                            time.sleep(0.01); continue
                         s = line.decode('utf-8', errors='ignore').strip().lower()
                         if ('done saving file' in s) or s.startswith('ok'):
                             break
@@ -739,13 +772,13 @@ def upload_sd_file():
                     pass
                 # 추가 보호: 저장 종료 직후 라인번호/체크섬 대기 상태 초기화(M110 N0) 및 짧은 드레인
                 try:
-                    _t.sleep(0.05)
+                    time.sleep(0.05)
                     pc.serial_conn.write(b"\nM110 N0\n"); pc.serial_conn.flush()
-                    end3 = _t.time() + 1.0
-                    while _t.time() < end3:
+                    end3 = time.time() + 1.0
+                    while time.time() < end3:
                         l2 = pc.serial_conn.readline()
                         if not l2:
-                            _t.sleep(0.01); continue
+                            time.sleep(0.01); continue
                         s2 = l2.decode('utf-8', errors='ignore').strip().lower()
                         # ok 또는 오류 라인 모두 소거. ok를 받으면 종료
                         if s2.startswith('ok'):
@@ -760,10 +793,10 @@ def upload_sd_file():
 
                 # 디렉터리 반영 보장: 재마운트(M22→M21) 후 오토스타트 차단(M524)
                 try:
-                    pc.serial_conn.write(b"M22\n"); pc.serial_conn.flush(); _t.sleep(0.1)
-                    pc.serial_conn.write(b"M21\n"); pc.serial_conn.flush(); _t.sleep(0.2)
+                    pc.serial_conn.write(b"M22\n"); pc.serial_conn.flush(); time.sleep(0.1)
+                    pc.serial_conn.write(b"M21\n"); pc.serial_conn.flush(); time.sleep(0.2)
                     # 혹시 있을 수 있는 SD 프린트 자동시작 중단
-                    pc.serial_conn.write(b"M524\n"); pc.serial_conn.flush(); _t.sleep(0.05)
+                    pc.serial_conn.write(b"M524\n"); pc.serial_conn.flush(); time.sleep(0.05)
                 except Exception:
                     pass
                 end_ok = True
