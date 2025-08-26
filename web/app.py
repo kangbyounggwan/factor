@@ -138,9 +138,10 @@ def create_app(config_manager: ConfigManager, factor_client=None):
             logger.error(f"상태 정보 조회 오류: {e}")
             return jsonify({'error': str(e)}), 500
 
-    # ===== UFP 업로드 & 인쇄 =====
+    # ===== UFP/G-code 업로드 & 인쇄 =====
     def _is_allowed(filename: str) -> bool:
-        return os.path.splitext(filename.lower())[1] == '.ufp'
+        low = filename.lower()
+        return low.endswith('.ufp') or low.endswith('.gcode') or low.endswith('.gcode.gz')
 
     def _count_effective_lines(zf: zipfile.ZipFile, gcode_name: str, gz: bool) -> int:
         cnt = 0
@@ -165,6 +166,21 @@ def create_app(config_manager: ConfigManager, factor_client=None):
         if sent_idx > 0 and (sent_idx % 25 == 0):
             return True
         return False
+
+    def _count_effective_lines_raw(path: str, gz: bool) -> int:
+        cnt = 0
+        open_fn = (lambda p: gzip.open(p, 'rt', encoding='utf-8', errors='ignore')) if gz else (lambda p: open(p, 'r', encoding='utf-8', errors='ignore'))
+        with open_fn(path) as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith(';'):
+                    continue
+                if ';' in line:
+                    line = line.split(';', 1)[0].strip()
+                    if not line:
+                        continue
+                cnt += 1
+        return cnt
 
     def _stream_ufp_gcode(printer_comm, ufp_path: str, wait_ok: bool = True, send_delay: float = 0.0) -> int:
         """UFP(zip) 내부의 .gcode/.gcode.gz를 찾아 메모리 스트림으로 라인 단위 전송"""
@@ -280,16 +296,127 @@ def create_app(config_manager: ConfigManager, factor_client=None):
                 pass
         return sent
 
-    def _start_print_job(ufp_path: str):
+    def _stream_gcode_file(printer_comm, file_path: str, wait_ok: bool = True, send_delay: float = 0.0) -> int:
+        """로컬 .gcode / .gcode.gz 파일을 라인 단위로 전송"""
+        sent = 0
+        gz = file_path.lower().endswith('.gcode.gz')
+        # 총 라인 수 계산(진행률 표시용)
+        try:
+            total = _count_effective_lines_raw(file_path, gz)
+        except Exception:
+            total = 0
+
+        open_fn = (lambda p: gzip.open(p, 'rt', encoding='utf-8', errors='ignore')) if gz else (lambda p: open(p, 'r', encoding='utf-8', errors='ignore'))
+
+        # 폴링 간섭 최소화: 인쇄 동안 폴링 간격 임시 완화
+        prev_temp = None; prev_pos = None
+        try:
+            if hasattr(app.factor_client, 'temp_poll_interval'):
+                prev_temp = app.factor_client.temp_poll_interval
+                app.factor_client.temp_poll_interval = max(prev_temp, 30.0)
+            if hasattr(app.factor_client, 'position_poll_interval'):
+                prev_pos = app.factor_client.position_poll_interval
+                app.factor_client.position_poll_interval = max(prev_pos, 30.0)
+        except Exception:
+            pass
+
+        try:
+            with open_fn(file_path) as f:
+                for raw in f:
+                    line = raw.strip()
+                    if not line or line.startswith(';'):
+                        continue
+                    if ';' in line:
+                        line = line.split(';', 1)[0].strip()
+                        if not line:
+                            continue
+
+                    # 로그: 너무 잦은 I/O 방지 위해 50줄마다 또는 M73만 기록
+                    if sent % 50 == 0 or line.upper().startswith('M73'):
+                        try:
+                            logging.getLogger('factor-firmware').info(f"[PRINT] {line}")
+                        except Exception:
+                            app.logger.info(f"[PRINT] {line}")
+
+                    must_wait = _should_wait(line, sent)
+                    ok = printer_comm.send_gcode(line, wait=(wait_ok or must_wait))
+                    if not ok:
+                        try:
+                            logging.getLogger('factor-firmware').warning(f"[PRINT] 전송 실패: {line}")
+                        except Exception:
+                            app.logger.warning(f"[PRINT] 전송 실패: {line}")
+                    sent += 1
+
+                    # 진행률 갱신
+                    try:
+                        m = re.match(r"\s*M73\s+(.*)", line, re.IGNORECASE)
+                        if m:
+                            params = m.group(1)
+                            p = re.search(r"P\s*(\d+(?:\.\d+)?)", params, re.IGNORECASE)
+                            r = re.search(r"R\s*(\d+)", params, re.IGNORECASE)
+                            completion = float(p.group(1)) if p else None
+                            time_left = int(r.group(1)) * 60 if r else None
+                            if completion is not None or time_left is not None:
+                                current = app.config['PRINT_PROGRESS'].get('layers', {}).get('current', sent)
+                                app.config['PRINT_PROGRESS'] = {
+                                    'completion': round(completion if completion is not None else 0.0, 1),
+                                    'time_elapsed': app.config['PRINT_PROGRESS'].get('time_elapsed', 0),
+                                    'time_left': time_left if time_left is not None else app.config['PRINT_PROGRESS'].get('time_left', 0),
+                                    'layers': {'current': current, 'total': total},
+                                    'timestamp': time.time()
+                                }
+                            else:
+                                completion = (sent / total * 100.0) if total > 0 else 0.0
+                                app.config['PRINT_PROGRESS'] = {
+                                    'completion': round(completion, 1),
+                                    'time_elapsed': app.config['PRINT_PROGRESS'].get('time_elapsed', 0),
+                                    'time_left': app.config['PRINT_PROGRESS'].get('time_left', 0),
+                                    'layers': {'current': sent, 'total': total},
+                                    'timestamp': time.time()
+                                }
+                        else:
+                            completion = (sent / total * 100.0) if total > 0 else 0.0
+                            app.config['PRINT_PROGRESS'] = {
+                                'completion': round(completion, 1),
+                                'time_elapsed': app.config['PRINT_PROGRESS'].get('time_elapsed', 0),
+                                'time_left': app.config['PRINT_PROGRESS'].get('time_left', 0),
+                                'layers': {'current': sent, 'total': total},
+                                'timestamp': time.time()
+                            }
+                    except Exception:
+                        pass
+
+                    if send_delay > 0:
+                        import time as _t; _t.sleep(send_delay)
+        finally:
+            # 폴링 간격 복원
+            try:
+                if prev_temp is not None:
+                    app.factor_client.temp_poll_interval = prev_temp
+                if prev_pos is not None:
+                    app.factor_client.position_poll_interval = prev_pos
+            except Exception:
+                pass
+
+        return sent
+
+    def _start_print_job(file_path: str):
         try:
             if not factor_client or not factor_client.is_connected():
                 app.logger.error('프린터 미연결 상태입니다.')
                 return
             pc = factor_client.printer_comm
-            total = _stream_ufp_gcode(pc, ufp_path, wait_ok=True, send_delay=0.0)
-            app.logger.info(f'UFP 인쇄 전송 완료: {total} lines')
+            low = file_path.lower()
+            if low.endswith('.ufp'):
+                total = _stream_ufp_gcode(pc, file_path, wait_ok=True, send_delay=0.0)
+                app.logger.info(f'UFP 인쇄 전송 완료: {total} lines')
+            elif low.endswith('.gcode') or low.endswith('.gcode.gz'):
+                total = _stream_gcode_file(pc, file_path, wait_ok=True, send_delay=0.0)
+                app.logger.info(f'G-code 인쇄 전송 완료: {total} lines')
+            else:
+                app.logger.error('지원하지 않는 파일 형식입니다.')
         except Exception as e:
-            app.logger.error(f'UFP 인쇄 중 오류: {e}')
+            app.logger.error(f"인쇄 중 오류: {e}")
 
     @app.route('/ufp', methods=['GET', 'POST'])
     def upload_ufp():
@@ -300,7 +427,7 @@ def create_app(config_manager: ConfigManager, factor_client=None):
             if file.filename == '':
                 return Response('<p>파일이 선택되지 않았습니다.</p><a href="/ufp">뒤로</a>', mimetype='text/html')
             if not _is_allowed(file.filename):
-                return Response('<p>허용되지 않은 파일 형식입니다(.ufp)</p><a href="/ufp">뒤로</a>', mimetype='text/html')
+                return Response('<p>허용되지 않은 파일 형식입니다(.ufp, .gcode, .gcode.gz)</p><a href="/ufp">뒤로</a>', mimetype='text/html', status=400)
 
             filename = secure_filename(file.filename)
             save_path = os.path.join(UPLOAD_FOLDER, filename)
@@ -315,9 +442,9 @@ def create_app(config_manager: ConfigManager, factor_client=None):
                 <a href="/dashboard">대시보드로 돌아가기</a>''', mimetype='text/html')
 
         return Response('''<html><body style="font-family: sans-serif; margin: 24px;">
-            <h2>UFP 업로드 및 인쇄</h2>
+            <h2>UFP/G-code 업로드 및 인쇄</h2>
             <form action="/ufp" method="post" enctype="multipart/form-data">
-              <input type="file" name="file" accept=".ufp" />
+              <input type="file" name="file" accept=".ufp,.gcode,.gcode.gz" />
               <button type="submit">업로드 & 인쇄 시작</button>
             </form>
             <p><a href="/dashboard">대시보드로 돌아가기</a></p>
