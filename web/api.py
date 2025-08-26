@@ -438,7 +438,7 @@ def upload_sd_file():
         up_stream = upfile.stream  # Werkzeug FileStorage stream (binary)
 
         with pc.serial_lock:
-            pc.sync_mode = True
+            pc.sync_mode = False  # RX 워커가 busy:/ok 등을 계속 소비하도록 유지
             try:
                 # SD init
                 pc.serial_conn.write(b"M21\n"); pc.serial_conn.flush(); _t.sleep(0.05)
@@ -467,9 +467,9 @@ def upload_sd_file():
                 except Exception:
                     pass
 
-                # 64KB 청크로 전송, 256KB마다 flush + 짧은 sleep
+                # 1KB 청크로 전송, 8KB마다 flush + 짧은 sleep (버퍼 압박/지연 완화)
                 bytes_since_flush = 0
-                CHUNK = 65536
+                CHUNK = 1024
                 while True:
                     chunk = up_stream.read(CHUNK)
                     if not chunk:
@@ -482,10 +482,10 @@ def upload_sd_file():
                     pc.serial_conn.write(chunk)
                     total_bytes += len(chunk)
                     bytes_since_flush += len(chunk)
-                    if bytes_since_flush >= 262144:  # 256KB
+                    if bytes_since_flush >= 8192:  # 8KB
                         pc.serial_conn.flush()
                         bytes_since_flush = 0
-                        _t.sleep(0.003)
+                        _t.sleep(0.001)
 
                 pc.serial_conn.flush()
                 # End write
