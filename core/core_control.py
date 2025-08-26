@@ -7,14 +7,7 @@ if TYPE_CHECKING:
     from .printer_comm import PrinterCommunicator
 
 try:
-    import multiprocessing as mp
-    import asyncio
-    import collections
-    try:
-        import serial_asyncio  # type: ignore
-        _HAS_SERIAL_ASYNCIO = True
-    except Exception:
-        _HAS_SERIAL_ASYNCIO = False
+    _HAS_SERIAL_ASYNCIO = False  # 스트리밍/비동기 경로 제거
 except Exception:
     _HAS_SERIAL_ASYNCIO = False
 
@@ -73,14 +66,7 @@ class ControlModule:
             pc.logger.info(f"프린터 연결 시도: {pc.port}@{pc.baudrate}")
             pc._set_state(pc.state.__class__.CONNECTING)
 
-            if _HAS_SERIAL_ASYNCIO:
-                pc.logger.info("비동기 송신 프로세스 모드 사용 (pyserial-asyncio)")
-                self._start_async_tx_bridge()
-                pc.connected = True
-                pc._set_state(pc.state.__class__.OPERATIONAL)
-                pc._initialize_printer()
-                pc.logger.info("프린터 연결 완료(Async TX)")
-                return True
+            # 비동기 송신 기능 제거됨
 
             # Fallback: 동기 시리얼
             pc.logger.info("pyserial-asyncio 미설치 → 동기 시리얼 모드로 동작")
@@ -134,12 +120,7 @@ class ControlModule:
         pc.logger.info("프린터 연결 해제 중...")
         pc.running = False
 
-        if pc.tx_bridge:
-            try:
-                pc.tx_bridge.stop()
-            except Exception:
-                pass
-            pc.tx_bridge = None
+        # 비동기 송신 기능 제거됨
 
         if pc.read_thread and pc.read_thread.is_alive():
             pc.read_thread.join(timeout=5)
@@ -168,13 +149,7 @@ class ControlModule:
         if not pc.connected:
             pc.logger.warning("프린터가 연결되지 않음")
             return False
-        if pc.tx_bridge:
-            line = f"{command}".strip()
-            if not line:
-                return True
-            is_barrier = bool(self._barrier_regex().match(line))
-            pc.tx_bridge.enqueue(line, barrier=is_barrier)
-            return True
+        # 비동기 송신 기능 제거됨
         if priority:
             pc._insert_priority_command(command)
         else:
@@ -192,26 +167,7 @@ class ControlModule:
         - 사용페이지/위치: 상태 폴링, 위치/온도 즉시 조회
         """
         pc = self.pc
-        if pc.tx_bridge:
-            try:
-                pc._last_temp_line = None; pc._last_pos_line = None; pc.last_response = None
-                line = f"{command}".strip()
-                if not line:
-                    return ""
-                is_barrier = bool(self._barrier_regex().match(line))
-                msg_id = pc.tx_bridge.enqueue(line, barrier=is_barrier)
-                waited = pc.tx_bridge.wait_ack(msg_id, timeout=timeout)
-                if waited:
-                    if command == "M105" and pc._last_temp_line:
-                        return pc._last_temp_line
-                    if command == "M114" and pc._last_pos_line:
-                        return pc._last_pos_line
-                    return pc.last_response if pc.last_response else "ok"
-                pc.logger.warning(f"명령 '{command}' 응답 타임아웃 ({timeout}초)")
-                return None
-            except Exception as e:
-                pc.logger.error(f"동기 전송/수신 실패(Async TX): {e}")
-                return None
+        # 비동기 송신 기능 제거됨
 
         # Fallback 동기
         if not pc.connected or not (pc.serial_conn and pc.serial_conn.is_open):
@@ -285,19 +241,7 @@ class ControlModule:
         if not pc.connected:
             pc.logger.warning("프린터가 연결되지 않음")
             return False
-        if pc.tx_bridge:
-            try:
-                line = f"{command}".strip()
-                if not line:
-                    return True
-                is_barrier = bool(self._barrier_regex().match(line))
-                msg_id = pc.tx_bridge.enqueue(line, barrier=is_barrier)
-                if is_barrier:
-                    return pc.tx_bridge.wait_ack(msg_id, timeout=timeout)
-                return True
-            except Exception as e:
-                pc.logger.error(f"G-code 전송 실패(Async TX): {e}")
-                return False
+        # 비동기 송신 기능 제거됨
         if wait:
             return self.send_command_and_wait(command, timeout=timeout) is not None
         try:
@@ -322,186 +266,9 @@ class ControlModule:
         """
         return re.compile(r"^(?:M109|M190|M400|G4|G28|G29|M112)\b", re.IGNORECASE)
 
-    def _start_async_tx_bridge(self):
-        """
-        비동기 송신 브리지(mp.Process + pyserial-asyncio) 시작
+    # 비동기 송신 브리지 제거됨
 
-        - 역할: 별도 프로세스에서 윈도우/크레딧 기반 송신 및 응답 수집
-        - 예상데이터: 내부 큐(in_q/out_q), ack 테이블 초기화
-        - 사용페이지/위치: 연결 시 1회 시작
-        """
-        if not _HAS_SERIAL_ASYNCIO:
-            return
-
-        pc = self.pc
-
-        def _tx_proc_main(port: str, baudrate: int, window_size: int, in_q: 'mp.Queue', out_q: 'mp.Queue'):
-            asyncio.run(self._tx_run(port, baudrate, window_size, in_q, out_q))
-
-        ctx = mp.get_context('spawn')
-        in_q: 'mp.Queue' = ctx.Queue(maxsize=10000)
-        out_q: 'mp.Queue' = ctx.Queue(maxsize=10000)
-        proc = ctx.Process(target=_tx_proc_main, args=(pc.port, pc.baudrate, pc.window_size, in_q, out_q), daemon=True)
-        proc.start()
-
-        class _Bridge:
-            def __init__(self, in_q, out_q, proc, on_rx: Callable[[str], None], on_error: Callable[[str], None]):
-                self.in_q = in_q; self.out_q = out_q; self.proc = proc
-                self._seq = 0
-                self._acks = {}
-                self._lock = threading.Lock()
-                self._running = True
-                # 전송 윈도우 상태(부모 프로세스 미러)
-                self._pending_map = {}
-                self._pending_order = collections.deque()
-                self._inflight_map = {}
-                self._inflight_order = collections.deque()
-                self._collector = threading.Thread(target=self._collect, args=(on_rx, on_error), daemon=True)
-                self._collector.start()
-
-            def enqueue(self, line: str, barrier: bool = False) -> int:
-                self._seq += 1
-                msg = {'id': self._seq, 'line': line, 'barrier': barrier, 'ts': time.time()}
-                # 보류 큐에 등록
-                with self._lock:
-                    self._pending_map[self._seq] = line
-                    self._pending_order.append(self._seq)
-                self.in_q.put(msg)
-                return self._seq
-
-            def wait_ack(self, msg_id: int, timeout: float = 8.0) -> bool:
-                end = time.time() + timeout
-                while time.time() < end:
-                    with self._lock:
-                        if msg_id in self._acks:
-                            self._acks.pop(msg_id, None)
-                            return True
-                    time.sleep(0.005)
-                return False
-
-            def stop(self):
-                self._running = False
-                try:
-                    self.in_q.put(None)
-                except Exception:
-                    pass
-
-            def _collect(self, on_rx, on_error):
-                while self._running:
-                    try:
-                        evt = self.out_q.get(timeout=0.5)
-                    except Exception:
-                        continue
-                    t = evt.get('type')
-                    if t == 'ack':
-                        with self._lock:
-                            self._acks[evt['id']] = evt
-                            # inflight 제거
-                            _id = evt['id']
-                            if _id in self._inflight_map:
-                                self._inflight_map.pop(_id, None)
-                                try:
-                                    self._inflight_order.remove(_id)
-                                except ValueError:
-                                    pass
-                        # 단계 추적: OK 수신
-                        try:
-                            tracker = getattr(self, '_tracker_ref', None) or getattr(self, 'tracker_ref', None)
-                            if tracker is None:
-                                tracker = getattr(self_parent(), 'phase_tracker', None)  # may raise
-                            ok_line = evt.get('line', '')
-                            if tracker:
-                                tracker.on_ack(ok_line)
-                        except Exception:
-                            pass
-                    elif t == 'rx':
-                        try:
-                            on_rx(evt.get('line', ''))
-                        except Exception:
-                            pass
-                    elif t == 'error':
-                        try:
-                            on_error(evt.get('message', ''))
-                        except Exception:
-                            pass
-                    elif t == 'tx':
-                        # 보류 → 인플라이트 이동
-                        _id = evt.get('id')
-                        if _id is not None:
-                            with self._lock:
-                                line = self._pending_map.pop(_id, None)
-                                if _id in self._pending_order:
-                                    try:
-                                        self._pending_order.remove(_id)
-                                    except ValueError:
-                                        pass
-                                if line is None:
-                                    line = evt.get('line', '')
-                                self._inflight_map[_id] = line
-                                self._inflight_order.append(_id)
-                        # 단계 추적: 전송 라인
-                        try:
-                            tracker = getattr(self, '_tracker_ref', None) or getattr(self, 'tracker_ref', None)
-                            if tracker is None:
-                                tracker = getattr(self_parent(), 'phase_tracker', None)
-                            if tracker:
-                                tracker.on_tx(evt.get('line', ''))
-                        except Exception:
-                            pass
-
-            def snapshot(self, window_size: int):
-                """현재 전송 윈도우 상태 스냅샷 반환"""
-                with self._lock:
-                    inflight = [
-                        {'id': _id, 'line': self._inflight_map.get(_id, '')}
-                        for _id in list(self._inflight_order)
-                    ]
-                    pending_ids = list(self._pending_order)[:window_size]
-                    pending = [
-                        {'id': _id, 'line': self._pending_map.get(_id, '')}
-                        for _id in pending_ids
-                    ]
-                return {'inflight': inflight, 'pending_next': pending}
-
-            def purge(self):
-                """대기 중인 전송을 모두 폐기(인플라이트는 유지될 수 있음)"""
-                # in_q 비우기
-                try:
-                    while True:
-                        self.in_q.get_nowait()
-                except Exception:
-                    pass
-                # 보류 큐 초기화
-                with self._lock:
-                    self._pending_map.clear()
-                    self._pending_order.clear()
-
-        def _on_rx(line: str):
-            if line:
-                try:
-                    self.pc._process_response(line)
-                except Exception:
-                    pass
-
-        def _on_error(msg: str):
-            if msg:
-                try:
-                    self.pc.logger.error(f"프린터 오류: {msg}")
-                    self.pc._set_state(self.pc.state.__class__.ERROR)
-                    self.pc._trigger_callback('on_error', msg)
-                except Exception:
-                    pass
-
-        pc.tx_bridge = _Bridge(in_q, out_q, proc, _on_rx, _on_error)
-
-    def get_tx_window_snapshot(self):
-        """전송 윈도우 스냅샷 반환(API용)"""
-        pc = self.pc
-        if not pc.tx_bridge:
-            return {'window_size': pc.window_size, 'inflight': [], 'pending_next': []}
-        snap = pc.tx_bridge.snapshot(pc.window_size)
-        snap['window_size'] = pc.window_size
-        return snap
+    # 전송 윈도우 스냅샷 기능 제거됨
 
     def get_phase_snapshot(self):
         pc = self.pc
@@ -515,15 +282,12 @@ class ControlModule:
         pc = self.pc
         try:
             # 대기열 비우기
-            if pc.tx_bridge and hasattr(pc.tx_bridge, 'purge'):
-                pc.tx_bridge.purge()
-            else:
-                # 동기 경로: 내부 큐 비우기
-                try:
-                    while True:
-                        pc.command_queue.get_nowait()
-                except Exception:
-                    pass
+            # 동기 경로: 내부 큐 비우기
+            try:
+                while True:
+                    pc.command_queue.get_nowait()
+            except Exception:
+                pass
 
             # 안전 파킹 및 쿨다운 시퀀스
             safe_cmds = [
@@ -634,69 +398,6 @@ class _PhaseTracker:
     def snapshot(self):
         return {"phase": self.phase.value, "since": self.last_change}
 
-    @staticmethod
-    async def _tx_run(port: str, baudrate: int, window_size: int, in_q: 'mp.Queue', out_q: 'mp.Queue'):
-        """
-        하위 프로세스 비동기 루프(송신/수신)
-
-        - 역할: send_q/credit/inflight 관리, ok 응답으로 크레딧 회복, 에러 이벤트 방출
-        - 예상데이터:
-          - 입력: 시리얼 포트/보드레이트/윈도우 크기, mp 큐 핸들
-          - 출력: 없음(이벤트는 out_q로 전달)
-        - 사용페이지/위치: 내부 전용
-        """
-        reader, writer = await serial_asyncio.open_serial_connection(url=port, baudrate=baudrate)
-        loop = asyncio.get_running_loop()
-        credit = asyncio.Semaphore(window_size)
-        inflight = collections.deque()
-        send_q: asyncio.Queue = asyncio.Queue(maxsize=window_size * 4)
-
-        def feeder():
-            while True:
-                msg = in_q.get()
-                if msg is None:
-                    loop.call_soon_threadsafe(send_q.put_nowait, None); break
-                loop.call_soon_threadsafe(send_q.put_nowait, msg)
-        threading.Thread(target=feeder, daemon=True).start()
-
-        async def writer_coro():
-            barrier_re = re.compile(r"^(?:M109|M190|M400|G4|G28|G29|M112)\b", re.IGNORECASE)
-            while True:
-                msg = await send_q.get()
-                if msg is None:
-                    break
-                if msg.get('barrier') or barrier_re.match(msg.get('line') or ''):
-                    while inflight:
-                        await asyncio.sleep(0.001)
-                await credit.acquire()
-                line = msg['line']
-                writer.write((line + "\n").encode('utf-8'))
-                try:
-                    await writer.drain()
-                except Exception:
-                    out_q.put({'type': 'error', 'message': 'writer.drain failed', 'ts': time.time()})
-                inflight.append(msg)
-                out_q.put({'type': 'tx', 'id': msg['id'], 'line': line, 'ts': time.time()})
-
-        async def reader_coro():
-            while True:
-                try:
-                    data = await reader.readuntil(b'\n')
-                except asyncio.IncompleteReadError:
-                    await asyncio.sleep(0.005); continue
-                s = data.decode('utf-8', errors='ignore').strip()
-                if not s:
-                    continue
-                out_q.put({'type': 'rx', 'line': s, 'ts': time.time()})
-                low = s.lower()
-                if low.startswith('ok') or s.startswith('start'):
-                    if inflight:
-                        acked = inflight.popleft()
-                        out_q.put({'type': 'ack', 'id': acked['id'], 'line': acked['line'], 'ts': time.time()})
-                    credit.release()
-                elif low.startswith('error') or '!!' in s or 'alarm' in s:
-                    out_q.put({'type': 'error', 'message': s, 'ts': time.time()})
-
-        await asyncio.gather(writer_coro(), reader_coro())
+    # 비동기 하위 프로세스 송신 루틴 제거됨
 
 
