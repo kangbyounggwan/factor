@@ -496,6 +496,49 @@ def upload_sd_file():
                 temp_path = None
                 total_target = None
 
+        # 업로드 보호: 폴링 일시정지 + 잔여 큐 정리 + (선택) 임의 전송 차단
+        import time as _t
+        orig_temp = getattr(fc, 'temp_poll_interval', 2.0)
+        orig_pos = getattr(fc, 'position_poll_interval', 5.0)
+        try:
+            fc.temp_poll_interval = 1e9
+            fc.position_poll_interval = 1e9
+            (current_app.logger if hasattr(current_app, 'logger') else logger).info("업로드 보호: 폴링 일시정지 시작")
+        except Exception:
+            pass
+        try:
+            _t.sleep(0.15)  # 폴링 스레드가 긴 sleep으로 진입하게 유도
+        except Exception:
+            pass
+        try:
+            if hasattr(pc, 'clear_command_queue'):
+                pc.clear_command_queue()
+        except Exception:
+            pass
+
+        # 강화 옵션: 업로드 중 임의 명령 큐잉 차단
+        orig_send = getattr(pc.control, 'send_command', None) if hasattr(pc, 'control') and pc.control else None
+        def _blocked_send(_cmd: str, priority: bool = False) -> bool:
+            return False
+        if orig_send:
+            try:
+                pc.control.send_command = _blocked_send  # type: ignore[attr-defined]
+            except Exception:
+                pass
+
+        def _restore_polling_and_send():
+            try:
+                fc.temp_poll_interval = orig_temp
+                fc.position_poll_interval = orig_pos
+                (current_app.logger if hasattr(current_app, 'logger') else logger).info("업로드 보호: 폴링 재개")
+            except Exception:
+                pass
+            if orig_send:
+                try:
+                    pc.control.send_command = orig_send  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+
         # 업로드 전 프린터 유휴 대기(M400)
         try:
             pc.send_command_and_wait('M400', timeout=5.0)
@@ -637,6 +680,8 @@ def upload_sd_file():
         except Exception:
             pass
 
+        # 폴링/전송 함수 원복 후 성공 반환
+        _restore_polling_and_send()
         return jsonify({'success': True, 'name': remote_name, 'lines': total_lines, 'bytes': total_bytes, 'closed': bool(end_ok)})
     except Exception as e:
         # 종료 시도
@@ -644,6 +689,11 @@ def upload_sd_file():
             fc = current_app.factor_client
             if fc and hasattr(fc, 'printer_comm'):
                 fc.printer_comm.send_command('M29')
+        except Exception:
+            pass
+        # 실패 시에도 폴링/전송 함수 원복
+        try:
+            _restore_polling_and_send()
         except Exception:
             pass
         return jsonify({'success': False, 'error': str(e)}), 500
