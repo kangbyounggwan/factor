@@ -186,7 +186,7 @@ class ControlModule:
             pc.command_queue.put(command)
         return True
 
-    def send_command_and_wait(self, command: str, timeout: float = 8.0, collect: bool = False, flush_before: bool = False):
+    def send_command_and_wait(self, command: str, timeout: float = 8.0, collect: bool = False):
         """
         동기 전송 후 ack/의미 있는 응답을 대기
 
@@ -227,17 +227,6 @@ class ControlModule:
             pc.sync_mode = True
             try:
                 pc._last_temp_line = None; pc._last_pos_line = None; pc.last_response = None
-                # 필요 시 입력 버퍼 비우기(이전 폴링 응답 제거)
-                if flush_before:
-                    try:
-                        if hasattr(pc.serial_conn, 'reset_input_buffer'):
-                            pc.serial_conn.reset_input_buffer()
-                        else:
-                            if pc.serial_conn.in_waiting:
-                                pc.serial_conn.read(pc.serial_conn.in_waiting)
-                    except Exception:
-                        pass
-
                 pc.logger.debug(f"[SYNC_TX] {command!r}")
                 pc.serial_conn.write(f"{command}\n".encode("utf-8"))
                 pc.serial_conn.flush()

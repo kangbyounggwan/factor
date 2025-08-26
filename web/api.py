@@ -575,34 +575,6 @@ def sd_progress():
         logger.error(f"SD 진행률 조회 오류: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
-
-@api_bp.route('/sd/init', methods=['POST'])
-def sd_init():
-    try:
-        fc = current_app.factor_client
-        if not fc or not hasattr(fc, 'printer_comm'):
-            return jsonify({'success': False, 'error': 'Factor client not available'}), 503
-        pc = fc.printer_comm
-        ok = pc.sd_init()
-        return jsonify({'success': bool(ok)}) if ok else (jsonify({'success': False}), 500)
-    except Exception as e:
-        logger.error(f"SD 초기화 오류: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-
-@api_bp.route('/sd/release', methods=['POST'])
-def sd_release():
-    try:
-        fc = current_app.factor_client
-        if not fc or not hasattr(fc, 'printer_comm'):
-            return jsonify({'success': False, 'error': 'Factor client not available'}), 503
-        pc = fc.printer_comm
-        ok = pc.sd_release()
-        return jsonify({'success': bool(ok)}) if ok else (jsonify({'success': False}), 500)
-    except Exception as e:
-        logger.error(f"SD 언마운트 오류: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
 @api_bp.route('/ufp/preview/<token>', methods=['GET'])
 def preview_ufp(token: str):
     """UFP 내부의 G-code 일부 또는 G-code 파일 일부(앞부분)를 미리보기용으로 반환"""

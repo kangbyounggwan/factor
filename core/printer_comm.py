@@ -501,8 +501,7 @@ class PrinterCommunicator:
         """SD 카드 파일 목록(M20) 원문 반환"""
         try:
             # 동기 모드에서는 목록 전체를 수집한다(OK 또는 'End file list'까지)
-            # 목록 요청 전 잔여 버퍼를 비우고(타 명령 응답 섞임 방지), 전체 수집
-            return self.control.send_command_and_wait("M20", timeout=8.0, collect=True, flush_before=True) or ""
+            return self.control.send_command_and_wait("M20", timeout=8.0, collect=True) or ""
         except Exception as e:
             self.logger.error(f"SD 목록 조회 실패: {e}")
             return ""
@@ -513,22 +512,8 @@ class PrinterCommunicator:
         - lines: 이터러블 텍스트 라인
         """
         try:
-            # SD 준비(M21)
-            try:
-                self.control.send_command_and_wait("M21", timeout=8.0, flush_before=True)
-            except Exception:
-                pass
             # 쓰기 시작
-            open_resp = self.control.send_command_and_wait(f"M28 {sd_name}", timeout=10.0, collect=True, flush_before=True)
-            if not open_resp or not any(k in open_resp.lower() for k in ["writing", "file opened", "open file", "sd write" ]):
-                # 재시도: M22 → M21 후 다시 시도
-                try:
-                    self.control.send_command_and_wait("M22", timeout=5.0, flush_before=True)
-                    self.control.send_command_and_wait("M21", timeout=8.0, flush_before=True)
-                except Exception:
-                    pass
-                open_resp = self.control.send_command_and_wait(f"M28 {sd_name}", timeout=10.0, collect=True, flush_before=True)
-            if not open_resp:
+            if not self.control.send_command_and_wait(f"M28 {sd_name}", timeout=10.0):
                 self.logger.error("SD 쓰기 시작 실패(M28)")
                 return False
 
@@ -541,14 +526,6 @@ class PrinterCommunicator:
                     line = line.split(";", 1)[0].strip()
                     if not line:
                         continue
-                # 일부 G-code는 'N<번호> ... *<checksum>' 형식을 포함할 수 있음 → SD 업로드 시 제거
-                # 예: N1 G28*18 → 'G28'
-                try:
-                    m = re.match(r"^N\d+\s+(.*?)(?:\*\d+)?$", line)
-                    if m:
-                        line = m.group(1).strip()
-                except Exception:
-                    pass
                 # 일반 라인은 대기 없이 전송(동기 모드: 소프트 윈도우로 페이싱)
                 ok = self.control.send_gcode(line, wait=False)
                 if not ok:
@@ -559,7 +536,7 @@ class PrinterCommunicator:
                     self.control.send_command_and_wait("M400", timeout=5.0)
 
             # 종료
-            if not self.control.send_command_and_wait("M29", timeout=10.0, flush_before=True):
+            if not self.control.send_command_and_wait("M29", timeout=10.0):
                 self.logger.error("SD 쓰기 종료 실패(M29)")
                 return False
             self.logger.info(f"SD 업로드 완료: {sd_name}, lines={sent}")
@@ -571,22 +548,17 @@ class PrinterCommunicator:
     def sd_upload_and_print(self, sd_name: str, file_path: str, start: bool = True) -> bool:
         """로컬 파일을 SD에 업로드 후 선택(M23)/인쇄(M24)"""
         try:
-            import os, gzip, io
-            if file_path.lower().endswith('.gcode.gz'):
-                with gzip.open(file_path, 'rt', encoding='utf-8', errors='ignore') as f:
-                    ok = self.sd_upload_gcode_lines(sd_name, f)
-            else:
-                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-                    ok = self.sd_upload_gcode_lines(sd_name, f)
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                ok = self.sd_upload_gcode_lines(sd_name, f)
             if not ok:
                 return False
             # 파일 선택
-            if not self.control.send_command_and_wait(f"M23 {sd_name}", timeout=8.0, flush_before=True):
+            if not self.control.send_command_and_wait(f"M23 {sd_name}", timeout=8.0):
                 self.logger.error("SD 파일 선택 실패(M23)")
                 return False
             # 인쇄 시작
             if start:
-                if not self.control.send_command_and_wait("M24", timeout=8.0, flush_before=True):
+                if not self.control.send_command_and_wait("M24", timeout=8.0):
                     self.logger.error("SD 인쇄 시작 실패(M24)")
                     return False
             return True
@@ -601,24 +573,6 @@ class PrinterCommunicator:
         except Exception as e:
             self.logger.error(f"SD 진행률 조회 실패: {e}")
             return ""
-
-    def sd_init(self) -> bool:
-        """SD 카드 초기화/마운트(M21)"""
-        try:
-            resp = self.control.send_command_and_wait("M21", timeout=8.0, flush_before=True)
-            return bool(resp)
-        except Exception as e:
-            self.logger.error(f"SD 초기화 실패: {e}")
-            return False
-
-    def sd_release(self) -> bool:
-        """SD 카드 언마운트(M22)"""
-        try:
-            resp = self.control.send_command_and_wait("M22", timeout=5.0, flush_before=True)
-            return bool(resp)
-        except Exception as e:
-            self.logger.error(f"SD 언마운트 실패: {e}")
-            return False
     
     def _parse_temperature_response(self, response: str):
         """온도 응답 파싱 (M105) - 통합된 파싱 사용"""
