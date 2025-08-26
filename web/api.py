@@ -563,7 +563,7 @@ def upload_sd_file():
                 pc.control.send_command = _blocked_send  # type: ignore[attr-defined]
             except Exception:
                 pass
-        # 전면 차단 게이트 on
+        # 전면 차단 게이트 on (업로드 시작 지점에서 즉시 적용)
         try:
             setattr(pc, 'tx_inhibit', True)
         except Exception:
@@ -595,7 +595,8 @@ def upload_sd_file():
             pass
 
         with pc.serial_lock:
-            pc.sync_mode = False  # RX 워커가 busy:/ok 등을 계속 소비하도록 유지
+            # 핸드셰이크 구간에서는 RX 워커 레이스를 피하기 위해 잠시 동기 모드로 전환
+            pc.sync_mode = True
             try:
                 # Begin write (M21 없이 바로 진입, 실패 시 에러 반환)
                 pc.serial_conn.write((f"M28 {remote_name}\n").encode('utf-8'))
@@ -621,6 +622,9 @@ def upload_sd_file():
                         return jsonify({'success': False, 'error': 'failed to enter SD write mode (M28). Ensure SD is initialized on the printer.'}), 500
                 except Exception:
                     pass
+
+                # 진입 성공 시 RX 워커 재가동( busy:/ok 처리를 위해 )
+                pc.sync_mode = False
 
                 # 8KB 청크로 전송, 64KB마다 flush + 짧은 sleep (버퍼 압박/지연 완화)
                 bytes_since_flush = 0
@@ -726,6 +730,15 @@ def upload_sd_file():
                 # 입력 버퍼 정리(잔여 ok/error 제거)
                 try:
                     pc.serial_conn.reset_input_buffer()
+                except Exception:
+                    pass
+
+                # 디렉터리 반영 보장: 재마운트(M22→M21) 후 오토스타트 차단(M524)
+                try:
+                    pc.serial_conn.write(b"M22\n"); pc.serial_conn.flush(); _t.sleep(0.1)
+                    pc.serial_conn.write(b"M21\n"); pc.serial_conn.flush(); _t.sleep(0.2)
+                    # 혹시 있을 수 있는 SD 프린트 자동시작 중단
+                    pc.serial_conn.write(b"M524\n"); pc.serial_conn.flush(); _t.sleep(0.05)
                 except Exception:
                     pass
                 end_ok = True
