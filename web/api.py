@@ -10,6 +10,7 @@ import logging
 import subprocess
 import re
 from typing import Dict, Any, List
+import time
 import os
 import io
 import zipfile
@@ -373,6 +374,35 @@ def api_error(error):
     """API 500 에러 핸들러"""
     logger.error(f"API 내부 오류: {error}")
     return jsonify({'error': 'Internal server error'}), 500
+
+@api_bp.route('/printer/sd/list', methods=['GET'])
+def list_sd_files():
+    """SD 카드 파일 목록 반환(M21 → M20 수행 후 수집된 결과)
+    - 프론트: 대시보드에서 주기적으로 호출
+    """
+    try:
+        fc = current_app.factor_client
+        if not fc or not hasattr(fc, 'printer_comm'):
+            return jsonify({'success': False, 'error': 'Factor client not available'}), 503
+        pc = fc.printer_comm
+
+        # SD 초기화(가능한 경우)
+        try:
+            pc.send_command('M21')
+        except Exception:
+            pass
+
+        # 목록 요청: 내부 수신 파서가 Begin/End file list를 수집
+        pc.send_command_and_wait('M20', timeout=3.0)
+        # 파서 버퍼 플러시 여유
+        time.sleep(0.1)
+
+        info = getattr(pc, 'sd_card_info', {}) or {}
+        files = info.get('files', [])
+        return jsonify({'success': True, 'files': files, 'last_update': info.get('last_update', 0)})
+    except Exception as e:
+        logger.error(f"SD 목록 조회 오류: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 @api_bp.route('/printer/tx-window', methods=['GET'])
 def get_tx_window():
     """현재 G-code 송신 윈도우(인플라이트/대기열) 스냅샷

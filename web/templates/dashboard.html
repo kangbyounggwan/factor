@@ -429,7 +429,15 @@
                         <span id="progress-time">시간: --:-- / --:--</span>
                         <span id="progress-layers">레이어: -- / --</span>
                     </div>
-                    
+                </div>
+
+                <div class="progress-section" style="margin-top:16px;">
+                    <h3>SD 카드 파일</h3>
+                    <div style="display:flex; gap:12px; align-items:center; margin-bottom:8px;">
+                        <button class="btn" style="width:auto; padding:8px 12px;" onclick="loadSdFiles()">새로고침</button>
+                        <span id="sd-last-update" style="color:#666; font-size:14px;">—</span>
+                    </div>
+                    <div id="sd-file-list" class="log-container" style="height:220px;"></div>
                 </div>
             </div>
             
@@ -476,12 +484,12 @@
         document.addEventListener('DOMContentLoaded', function() {
             loadStatus();
             loadLogs();
-            
+            loadSdFiles();
             
             // 3초마다 상태 업데이트
             statusUpdateInterval = setInterval(loadStatus, 3000);
             phaseUpdateInterval = setInterval(loadPhase, 1000);
-            
+            setInterval(loadSdFiles, 10000);
             
             // 2초마다 로그 업데이트 (진행 상황을 더 자주 표시)
             setInterval(loadLogs, 2000);
@@ -867,6 +875,44 @@
             
             // 스크롤을 맨 아래로
             container.scrollTop = container.scrollHeight;
+        }
+
+        // SD 카드 파일 목록 로드
+        async function loadSdFiles() {
+            try {
+                const res = await fetch('/api/printer/sd/list');
+                const data = await res.json();
+                const box = document.getElementById('sd-file-list');
+                const last = document.getElementById('sd-last-update');
+                if (!box) return;
+
+                if (!res.ok || !data.success) {
+                    box.innerHTML = '<div class="log-entry error">SD 카드 목록을 불러오지 못했습니다.</div>';
+                    if (last) last.textContent = '—';
+                    return;
+                }
+
+                const files = Array.isArray(data.files) ? data.files : [];
+                if (files.length === 0) {
+                    box.innerHTML = '<div class="log-entry">파일이 없습니다.</div>';
+                } else {
+                    box.innerHTML = '';
+                    files.forEach((f) => {
+                        const div = document.createElement('div');
+                        div.className = 'log-entry';
+                        const size = (f.size != null) ? ` (${f.size}B)` : '';
+                        div.textContent = `${f.name}${size}`;
+                        box.appendChild(div);
+                    });
+                }
+                if (last) {
+                    const ts = data.last_update ? new Date(data.last_update * 1000).toLocaleTimeString() : '—';
+                    last.textContent = `마지막 갱신: ${ts}`;
+                }
+            } catch (e) {
+                const box = document.getElementById('sd-file-list');
+                if (box) box.innerHTML = `<div class="log-entry error">오류: ${e.message}</div>`;
+            }
         }
 
         

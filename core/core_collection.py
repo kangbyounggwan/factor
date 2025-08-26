@@ -22,6 +22,12 @@ class DataCollectionModule:
 
     def __init__(self, pc: "PrinterCommunicator"):
         self.pc = pc
+        # SD 카드 목록 수집 상태 변수 초기화
+        try:
+            setattr(self.pc, '_sd_list_capturing', False)
+            setattr(self.pc, '_sd_list_buffer', [])
+        except Exception:
+            pass
 
     # ===== 파싱 및 응답 처리 =====
     def process_response(self, line: str):
@@ -39,6 +45,40 @@ class DataCollectionModule:
         pc.last_response = line
         pc.last_rx_line = line
         pc.last_rx_time = time.time()
+
+        # ---- SD 카드 파일 목록(M20) 수집 처리 ----
+        try:
+            llow = (line or '').strip().lower()
+            if llow.startswith('begin file list'):
+                pc._sd_list_capturing = True
+                pc._sd_list_buffer = []
+                return
+            if llow.startswith('end file list'):
+                pc._sd_list_capturing = False
+                files = []
+                for raw in getattr(pc, '_sd_list_buffer', []) or []:
+                    s = (raw or '').strip()
+                    if not s or s.lower() in ('ok',):
+                        continue
+                    # 디렉터리 라인 무시(펌웨어별 출력 포맷 다양)
+                    if s.endswith('/') or s.endswith('\\'):
+                        continue
+                    name = s; size = None
+                    parts = s.split()
+                    if len(parts) >= 2 and parts[-1].isdigit():
+                        size = int(parts[-1])
+                        name = ' '.join(parts[:-1])
+                    files.append({'name': name, 'size': size})
+                pc.sd_card_info = {'files': files, 'last_update': time.time()}
+                pc._sd_list_buffer = []
+                return
+            if getattr(pc, '_sd_list_capturing', False):
+                # 수집 중에는 버퍼에만 적재하고 다른 파싱은 생략
+                pc._sd_list_buffer.append(line)
+                return
+        except Exception:
+            # SD 수집 로직 오류는 전체 파이프라인을 막지 않도록 무시
+            pass
 
         pc.detection_responses.append(line)
 
