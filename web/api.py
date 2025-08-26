@@ -53,14 +53,14 @@ def get_status():
             }
         else:
             status_data = {
-            'printer_status': factor_client.get_printer_status().to_dict(),
-            'temperature_info': factor_client.get_temperature_info().to_dict(),
-            'position': factor_client.get_position().to_dict(),
-            'progress': factor_client.get_print_progress().to_dict(),
-            'system_info': factor_client.get_system_info().to_dict(),
-            'connected': factor_client.is_connected(),
-            'timestamp': factor_client.last_heartbeat
-        }
+                'printer_status': factor_client.get_printer_status().to_dict(),
+                'temperature_info': factor_client.get_temperature_info().to_dict(),
+                'position': factor_client.get_position().to_dict(),
+                'progress': factor_client.get_print_progress().to_dict(),
+                'system_info': factor_client.get_system_info().to_dict(),
+                'connected': factor_client.is_connected(),
+                'timestamp': factor_client.last_heartbeat
+            }
         
         return jsonify(status_data)
         
@@ -140,6 +140,11 @@ def get_progress():
         if not factor_client:
             return jsonify({'error': 'Factor client not available'}), 503
         
+        # SD 진행률 오토리포트 캐시 우선
+        sd_prog = getattr(factor_client, '_sd_progress_cache', None)
+        if isinstance(sd_prog, dict) and sd_prog.get('active'):
+            return jsonify(sd_prog)
+            
         progress = factor_client.get_print_progress()
         return jsonify(progress.to_dict())
         
@@ -442,6 +447,63 @@ def list_sd_files():
         return jsonify({'success': True, 'files': files, 'last_update': info.get('last_update', 0)})
     except Exception as e:
         logger.error(f"SD 목록 조회 오류: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@api_bp.route('/printer/sd/print', methods=['POST'])
+def sd_print_file():
+    """SD 카드에서 선택한 파일 출력 시작(M23→M24). cooling/finishing 중이면 409.
+    요청: {"name": "파일명.gcode"}
+    """
+    try:
+        fc = current_app.factor_client
+        if not fc or not hasattr(fc, 'printer_comm'):
+            return jsonify({'success': False, 'error': 'Factor client not available'}), 503
+        pc = fc.printer_comm
+        try:
+            if hasattr(pc, 'control') and pc.control:
+                phase = pc.control.get_phase_snapshot().get('phase', 'unknown')
+                if phase in ('finishing', 'cooling'):
+                    return jsonify({'success': False, 'error': 'Printer is cooling/finishing'}), 409
+        except Exception:
+            pass
+
+        data = request.get_json(silent=True) or {}
+        name = (data.get('name') or '').strip()
+        if not name:
+            return jsonify({'success': False, 'error': 'name required'}), 400
+
+        # 안전: 임의 송신 차단 중이면 거부
+        if getattr(pc, 'tx_inhibit', False):
+            return jsonify({'success': False, 'error': 'busy (upload/lock active)'}), 409
+
+        # SD 출력 시작
+        ok1 = pc.send_command_and_wait(f"M23 {name}", timeout=5.0)
+        if ok1 is False:
+            return jsonify({'success': False, 'error': 'failed to select SD file (M23)'}), 500
+        ok2 = pc.send_command_and_wait("M24", timeout=5.0)
+        if ok2 is False:
+            return jsonify({'success': False, 'error': 'failed to start SD print (M24)'}), 500
+
+        # SD 진행률 오토리포트(M27 S5) 등록 및 캐시 초기화
+        try:
+            pc.send_command('M27 S5')
+        except Exception:
+            pass
+        try:
+            setattr(fc, '_sd_progress_cache', {
+                'active': True,
+                'completion': 0.0,
+                'printed_bytes': 0,
+                'total_bytes': 0,
+                'eta_sec': None,
+                'last_update': time.time(),
+                'source': 'sd'
+            })
+        except Exception:
+            pass
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f"SD 출력 시작 오류: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @api_bp.route('/printer/sd/upload', methods=['POST'])
@@ -853,7 +915,7 @@ def upload_sd_file():
                 end_ok = True
                 try:
                     (current_app.logger if hasattr(current_app, 'logger') else logger).info(
-                        f"SD 업로드 완료: {remote_name} ({total_bytes} bytes, {sent_chunks} 청크)"
+                        f"SD 업로드 완료: {remote_name} ({total_bytes} bytes)"
                     )
                 except Exception:
                     pass

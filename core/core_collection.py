@@ -166,6 +166,46 @@ class DataCollectionModule:
         )
         pc._trigger_callback('on_response', response)
 
+        # ---- SD 진행률 오토리포트(M27) 파싱 ----
+        try:
+            llow2 = (line or '').strip().lower()
+            if 'sd printing byte' in llow2:
+                m = re.search(r"sd printing byte\s+(\d+)/(\d+)", llow2)
+                if m:
+                    printed = int(m.group(1)); total = int(m.group(2))
+                    completion = (printed / total * 100.0) if total > 0 else 0.0
+                    try:
+                        fc = getattr(self.pc, 'factor_client', None)
+                        if fc is not None:
+                            setattr(fc, '_sd_progress_cache', {
+                                'active': True,
+                                'completion': completion,
+                                'printed_bytes': printed,
+                                'total_bytes': total,
+                                'eta_sec': None,
+                                'last_update': time.time(),
+                                'source': 'sd'
+                            })
+                    except Exception:
+                        pass
+            elif 'not sd printing' in llow2 or 'sd printing byte 0/0' in llow2:
+                try:
+                    fc = getattr(self.pc, 'factor_client', None)
+                    if fc is not None:
+                        setattr(fc, '_sd_progress_cache', {
+                            'active': False,
+                            'completion': 0.0,
+                            'printed_bytes': 0,
+                            'total_bytes': 0,
+                            'eta_sec': None,
+                            'last_update': time.time(),
+                            'source': 'sd'
+                        })
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     def _parse_temperature(self, line: str) -> bool:
         """
         온도 응답 라인 파싱(M105 등)
