@@ -498,6 +498,10 @@
                         <button class="btn" onclick="sdList()">SD 목록</button>
                         <button class="btn" onclick="sdProgress()">SD 진행률</button>
                     </div>
+                    <div style="display:flex; gap:8px; margin-top:8px;">
+                        <button class="btn" onclick="sdInit()">SD 초기화(M21)</button>
+                        <button class="btn" onclick="sdRelease()">SD 언마운트(M22)</button>
+                    </div>
                     <pre id="sd-result" style="height:160px; overflow:auto; background:#111827; color:#e5e7eb; padding:8px; border-radius:8px; margin-top:8px;"></pre>
                 </div>
                 
@@ -1133,6 +1137,34 @@
                 }
             } catch (e) {
                 addLogEntry('SD 진행률 오류: ' + e.message, 'error');
+            }
+        }
+
+        async function sdInit() {
+            try {
+                const res = await fetch('/api/sd/init', { method: 'POST' });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    addLogEntry('SD 초기화 완료(M21)', 'info');
+                } else {
+                    addLogEntry('SD 초기화 실패: ' + (data.error || res.statusText), 'error');
+                }
+            } catch (e) {
+                addLogEntry('SD 초기화 오류: ' + e.message, 'error');
+            }
+        }
+
+        async function sdRelease() {
+            try {
+                const res = await fetch('/api/sd/release', { method: 'POST' });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    addLogEntry('SD 언마운트 완료(M22)', 'info');
+                } else {
+                    addLogEntry('SD 언마운트 실패: ' + (data.error || res.statusText), 'error');
+                }
+            } catch (e) {
+                addLogEntry('SD 언마운트 오류: ' + e.message, 'error');
             }
         }
     </script>
