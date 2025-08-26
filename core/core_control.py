@@ -385,6 +385,17 @@ class ControlModule:
                     if (time.time() - last_ok_ts) >= stable_seconds:
                         try:
                             pc.logger.info("쿨링 완료")
+                            # 상태/단계 IDLE로 전환
+                            try:
+                                pc._set_state(pc.state.__class__.OPERATIONAL)
+                            except Exception:
+                                pass
+                            try:
+                                tracker = getattr(pc, 'phase_tracker', None)
+                                if tracker:
+                                    tracker._set(_PrintPhase.IDLE)
+                            except Exception:
+                                pass
                         except Exception:
                             pass
                         return
@@ -435,6 +446,7 @@ class _PrintPhase(Enum):
     PRIMING = "priming"
     FIRST_LAYER = "first_layer"
     PRINTING = "printing"
+    IDLE = "idle"
 
 
 class _PhaseTracker:

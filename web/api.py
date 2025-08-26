@@ -713,6 +713,10 @@ def get_printer_phase():
         pc = fc.printer_comm
         if hasattr(pc, 'control') and pc.control:
             snap = pc.control.get_phase_snapshot()
+            # unknown이면 idle로 맵핑(쿨링 종료 후 명확한 대기 표시)
+            phase = snap.get('phase', 'unknown')
+            if phase == 'unknown':
+                snap['phase'] = 'idle'
             return jsonify(snap)
         return jsonify({'phase': 'unknown', 'since': 0})
     except Exception as e:
