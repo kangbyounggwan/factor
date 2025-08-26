@@ -13,6 +13,7 @@ from typing import Dict, Any, List
 import time
 import os
 import tempfile
+import io
 
 api_bp = Blueprint('api', __name__)
 logger = logging.getLogger('api')
@@ -52,14 +53,14 @@ def get_status():
             }
         else:
             status_data = {
-                'printer_status': factor_client.get_printer_status().to_dict(),
-                'temperature_info': factor_client.get_temperature_info().to_dict(),
-                'position': factor_client.get_position().to_dict(),
-                'progress': factor_client.get_print_progress().to_dict(),
-                'system_info': factor_client.get_system_info().to_dict(),
-                'connected': factor_client.is_connected(),
-                'timestamp': factor_client.last_heartbeat
-            }
+            'printer_status': factor_client.get_printer_status().to_dict(),
+            'temperature_info': factor_client.get_temperature_info().to_dict(),
+            'position': factor_client.get_position().to_dict(),
+            'progress': factor_client.get_print_progress().to_dict(),
+            'system_info': factor_client.get_system_info().to_dict(),
+            'connected': factor_client.is_connected(),
+            'timestamp': factor_client.last_heartbeat
+        }
         
         return jsonify(status_data)
         
@@ -668,7 +669,7 @@ def upload_sd_file():
                         # 마를린: "Writing to file:"/"File opened"/"Now fresh file:" 만 진입 확정(ok만으로는 불충분)
                         if ('writing to file' in s) or ('file opened' in s) or ('now fresh file' in s):
                             engaged = True
-                            break
+                        break
                     if not engaged:
                         # 진입 실패로 간주(M21을 사용하지 않고 안전하게 종료)
                         pc.serial_conn.write(b"M29\n"); pc.serial_conn.flush()
@@ -684,11 +685,59 @@ def upload_sd_file():
                 except Exception:
                     pass
 
-                # 8KB 청크로 전송, 64KB마다 flush + 짧은 sleep (버퍼 압박/지연 완화)
-                bytes_since_flush = 0
-                CHUNK = 8192
-                sent_chunks = 0
-                total_chunks = (int((total_target + CHUNK - 1) / CHUNK) if total_target is not None else None)
+                # ===== N-라인 체크섬 기반 전송 유틸 =====
+                def xor_cs(s: str) -> int:
+                    v = 0
+                    for ch in s:
+                        v ^= ord(ch)
+                    return v
+
+                def send_nline(ser, n: int, payload: str, timeout: float = 2.5):
+                    line = f"N{n} {payload}"
+                    cs = xor_cs(line)
+                    ser.write((line + f"*{cs}\n").encode("ascii", "ignore"))
+                    ser.flush()
+                    deadline = time.time() + timeout
+                    while time.time() < deadline:
+                        resp = ser.readline().decode("utf-8", "ignore").strip()
+                        if not resp:
+                            time.sleep(0.01); continue
+                        low = resp.lower()
+                        # 즉시 에러 로그(라인넘버/체크섬 관련)
+                        if ("line number is not last line number+1" in low) or ("no checksum with line number" in low):
+                            (current_app.logger if hasattr(current_app, 'logger') else logger).error(f"SD 업로드 오류: {resp}")
+                        if low.startswith("ok") or ("done saving file" in low):
+                            return n + 1, None
+                        if low.startswith("resend") or low.startswith("rs"):
+                            try:
+                                import re as _re
+                                m = _re.search(r"(?:resend|rs)[:\s]+(\d+)", low)
+                                if m:
+                                    k = int(m.group(1))
+                                    return None, k
+                            except Exception:
+                                pass
+                        # 기타 에러는 지속 관찰
+                    return None, 'timeout'
+
+                def send_with_cs(ser, n: int, payload: str, timeout: float = 2.5) -> int:
+                    attempts = 0
+                    while True:
+                        nxt, resend_to = send_nline(ser, n, payload, timeout)
+                        if resend_to is None and isinstance(nxt, int):
+                            return nxt
+                        if isinstance(resend_to, int):
+                            n = resend_to
+                            attempts += 1
+                            if attempts > 100:
+                                raise RuntimeError("too many resends")
+                            continue
+                        raise RuntimeError(f"send_nline failed: {resend_to}")
+
+                # 진행 로그 주기 제한(바이트/시간)
+                LOG_INTERVAL_BYTES = 512 * 1024
+                LOG_INTERVAL_SEC = 1.0
+                bytes_since_log = 0
                 try:
                     # 너무 잦은 로그는 journald/파일 로거에서 드롭될 수 있으므로 시작/주기/완료만 기록
                     (current_app.logger if hasattr(current_app, 'logger') else logger).info(
@@ -696,28 +745,30 @@ def upload_sd_file():
                     )
                 except Exception:
                     pass
-                # 진행 로그 주기 제한(바이트/시간)
-                LOG_INTERVAL_BYTES = 512 * 1024
-                LOG_INTERVAL_SEC = 1.0
-                bytes_since_log = 0
                 last_log_ts = time.time()
-                while True:
-                    chunk = up_stream.read(CHUNK)
-                    if not chunk:
-                        break
-                    # 라인 수는 '\n' 개수로 계산(로그용)
-                    try:
-                        total_lines += chunk.count(b"\n")
-                    except Exception:
-                        pass
-                    # 바이너리 블록 상에서 우발적인 'N..' 시작을 회피하기 위해 앞선 라인이 개행으로 끝나도록 보장
-                    # (대체로 G-code 텍스트지만 안전 차원)
-                    pc.serial_conn.write(chunk)
-                    total_bytes += len(chunk)
-                    bytes_since_flush += len(chunk)
-                    sent_chunks += 1
-                    # 진행 로그(주기 제한)
-                    bytes_since_log += len(chunk)
+                # 라인 스트림으로 변환하여 체크섬 전송
+                text_stream = io.TextIOWrapper(up_stream, encoding='utf-8', errors='ignore')
+                nline = 0
+                # 라인 번호 초기화 후(안전) 파일 시작까지 체크섬으로 전송
+                try:
+                    nline = send_with_cs(pc.serial_conn, nline, "M110 N0", timeout=2.0)
+                except Exception:
+                    pass
+                try:
+                    nline = send_with_cs(pc.serial_conn, nline, f"M28 {remote_name}", timeout=5.0)
+                except Exception:
+                    # 이미 진입 상태일 수 있으나, 실패 시 상위 로직으로 실패 처리됨
+                    pass
+
+                sent_lines = 0
+                for raw_line in text_stream:
+                    line = raw_line.rstrip('\r\n')
+                    nline = send_with_cs(pc.serial_conn, nline, line if line else '', timeout=4.0)
+                    total_lines += 1
+                    sent_lines += 1
+                    ln_bytes = len(line.encode('utf-8', 'ignore')) + 1
+                    total_bytes += ln_bytes
+                    bytes_since_log += ln_bytes
                     now_ts = time.time()
                     if (bytes_since_log >= LOG_INTERVAL_BYTES) or ((now_ts - last_log_ts) >= LOG_INTERVAL_SEC):
                         try:
@@ -726,9 +777,11 @@ def upload_sd_file():
                                 (current_app.logger if hasattr(current_app, 'logger') else logger).info(
                                     f"SD 업로드 진행: {total_bytes}/{total_target} bytes ({pct:.1f}%)"
                                 )
-                            else:
+                        except Exception:
+                            pass
+                        try:
                                 (current_app.logger if hasattr(current_app, 'logger') else logger).info(
-                                    f"SD 업로드 진행: {sent_chunks} 청크 전송 ({total_bytes} bytes)"
+                                    f"SD 업로드 진행: {sent_lines} lines ({total_bytes} bytes)"
                                 )
                         except Exception:
                             pass
@@ -740,10 +793,6 @@ def upload_sd_file():
                     except Exception:
                         pass
 
-                    if bytes_since_flush >= 65536:  # 64KB
-                        pc.serial_conn.flush()
-                        bytes_since_flush = 0
-                        time.sleep(0.002)
 
                 pc.serial_conn.flush()
                 # 장치가 마지막 바이트를 파일로 플러시할 수 있도록 잠시 대기 후 안전하게 M29 전송
@@ -764,12 +813,14 @@ def upload_sd_file():
                     while time.time() < end2:
                         line = pc.serial_conn.readline()
                         if not line:
-                            time.sleep(0.01); continue
+                            time.sleep(0.01)
+                            continue
                         s = line.decode('utf-8', errors='ignore').strip().lower()
                         if ('done saving file' in s) or s.startswith('ok'):
                             break
                 except Exception:
                     pass
+                
                 # 추가 보호: 저장 종료 직후 라인번호/체크섬 대기 상태 초기화(M110 N0) 및 짧은 드레인
                 try:
                     time.sleep(0.05)
