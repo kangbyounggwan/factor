@@ -483,8 +483,9 @@ def sd_list():
         if not fc or not hasattr(fc, 'printer_comm'):
             return jsonify({'success': False, 'error': 'Factor client not available'}), 503
         pc = fc.printer_comm
-        resp = pc.sd_list()
-        return jsonify({'success': True, 'raw': resp})
+        raw = pc.sd_list()
+        parsed = pc.sd_list_parsed() if hasattr(pc, 'sd_list_parsed') else []
+        return jsonify({'success': True, 'raw': raw, 'files': parsed})
     except Exception as e:
         logger.error(f"SD 목록 조회 오류: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500

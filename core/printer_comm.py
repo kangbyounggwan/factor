@@ -507,6 +507,47 @@ class PrinterCommunicator:
             self.logger.error(f"SD 목록 조회 실패: {e}")
             return ""
 
+    def sd_list_parsed(self) -> List[Dict[str, Any]]:
+        """M20 원문을 파싱해 파일 목록을 배열로 반환
+        반환 형식: [{ 'name': 'JOB.GCO', 'size': 12345, 'is_dir': False }, ...]
+        """
+        raw = self.sd_list()
+        files: List[Dict[str, Any]] = []
+        try:
+            lines = [l.strip() for l in raw.replace('\r','').split('\n') if l.strip()]
+            # 'Begin file list' ~ 'End file list' 사이만 취득
+            start = 0; end = len(lines)
+            for i, l in enumerate(lines):
+                if l.lower().startswith('begin file list'):
+                    start = i + 1
+                    break
+            for j in range(len(lines)-1, -1, -1):
+                if lines[j].lower().startswith('end file list'):
+                    end = j
+                    break
+            for l in lines[start:end]:
+                if not l or l.lower().startswith('ok'):
+                    continue
+                # 예: 'JOB.GCO 12345' 또는 'FOLDER/FILE.GCO 123' 또는 'FOLDER/'
+                name = l
+                size = None
+                is_dir = False
+                parts = l.split()
+                if len(parts) >= 2 and parts[-1].isdigit():
+                    try:
+                        size = int(parts[-1])
+                        name = l[: l.rfind(' ')].strip()
+                    except Exception:
+                        size = None
+                if name.endswith('/'):
+                    is_dir = True
+                    name = name[:-1]
+                if name:
+                    files.append({'name': name, 'size': size, 'is_dir': is_dir})
+        except Exception:
+            pass
+        return files
+
     def sd_upload_gcode_lines(self, sd_name: str, lines) -> bool:
         """SD 카드에 G-code 파일 쓰기(M28/M29)
         - sd_name: SD에 저장될 파일명(호환성 위해 8.3 대문자 권장)
