@@ -417,7 +417,7 @@ def api_error(error):
 
 @api_bp.route('/printer/sd/list', methods=['GET'])
 def list_sd_files():
-    """SD 카드 파일 목록 반환(M21 → M20 수행 후 수집된 결과)
+    """SD 카드 파일 목록 반환(M20만 사용; M21은 사용 지양)
     - 프론트: 대시보드에서 주기적으로 호출
     """
     try:
@@ -434,14 +434,11 @@ def list_sd_files():
         except Exception:
             pass
 
-        # SD 초기화(가능한 경우)
-        try:
-            pc.send_command('M21')
-        except Exception:
-            pass
-
         # 목록 요청: 내부 수신 파서가 Begin/End file list를 수집
-        pc.send_command_and_wait('M20', timeout=3.0)
+        resp = pc.send_command_and_wait('M20', timeout=3.0)
+        if not resp:
+            # SD가 초기화되지 않았거나 비어있을 수 있음 → 안전하게 에러 반환(오토스타트 방지)
+            return jsonify({'success': False, 'error': 'SD not ready (M20 no response). Please initialize SD on printer UI.'}), 503
         # 파서 버퍼 플러시 여유
         time.sleep(0.1)
 
@@ -590,9 +587,7 @@ def upload_sd_file():
         with pc.serial_lock:
             pc.sync_mode = False  # RX 워커가 busy:/ok 등을 계속 소비하도록 유지
             try:
-                # SD init
-                pc.serial_conn.write(b"M21\n"); pc.serial_conn.flush(); _t.sleep(0.05)
-                # Begin write
+                # Begin write (M21 없이 바로 진입, 실패 시 에러 반환)
                 pc.serial_conn.write((f"M28 {remote_name}\n").encode('utf-8'))
                 pc.serial_conn.flush(); _t.sleep(0.05)
 
@@ -610,10 +605,10 @@ def upload_sd_file():
                             engaged = True
                             break
                     if not engaged:
-                        # 진입 실패로 간주
+                        # 진입 실패로 간주(M21을 사용하지 않고 안전하게 종료)
                         pc.serial_conn.write(b"M29\n"); pc.serial_conn.flush()
                         pc.sync_mode = False
-                        return jsonify({'success': False, 'error': 'failed to enter SD write mode (M28)'}), 500
+                        return jsonify({'success': False, 'error': 'failed to enter SD write mode (M28). Ensure SD is initialized on the printer.'}), 500
                 except Exception:
                     pass
 
