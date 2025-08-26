@@ -436,6 +436,21 @@ def upload_sd_file():
 
         # 업로드 스트림을 바이너리로 읽기
         up_stream = upfile.stream  # Werkzeug FileStorage stream (binary)
+        # 총 크기/총 청크 수 추정
+        total_target = None
+        try:
+            if getattr(upfile, 'content_length', None):
+                total_target = int(upfile.content_length)
+        except Exception:
+            total_target = None
+        if total_target is None:
+            try:
+                cur = up_stream.tell()
+                up_stream.seek(0, os.SEEK_END)
+                total_target = up_stream.tell()
+                up_stream.seek(cur, os.SEEK_SET)
+            except Exception:
+                total_target = None
 
         with pc.serial_lock:
             pc.sync_mode = False  # RX 워커가 busy:/ok 등을 계속 소비하도록 유지
@@ -470,6 +485,12 @@ def upload_sd_file():
                 # 1KB 청크로 전송, 8KB마다 flush + 짧은 sleep (버퍼 압박/지연 완화)
                 bytes_since_flush = 0
                 CHUNK = 1024
+                sent_chunks = 0
+                total_chunks = (int((total_target + CHUNK - 1) / CHUNK) if total_target is not None else None)
+                try:
+                    logger.info(f"SD 업로드 시작: {remote_name} ({total_target if total_target is not None else '?'} bytes)")
+                except Exception:
+                    pass
                 while True:
                     chunk = up_stream.read(CHUNK)
                     if not chunk:
@@ -482,6 +503,21 @@ def upload_sd_file():
                     pc.serial_conn.write(chunk)
                     total_bytes += len(chunk)
                     bytes_since_flush += len(chunk)
+                    sent_chunks += 1
+                    # 진행 로그(청크 기준)
+                    try:
+                        if total_chunks is not None:
+                            logger.info(f"SD 업로드 진행: {sent_chunks}/{total_chunks} 청크")
+                        else:
+                            logger.info(f"SD 업로드 진행: {sent_chunks} 청크 전송")
+                    except Exception:
+                        pass
+                    # 하트비트 갱신(업로드 중 타임아웃 방지)
+                    try:
+                        fc.last_heartbeat = time.time()
+                    except Exception:
+                        pass
+
                     if bytes_since_flush >= 8192:  # 8KB
                         pc.serial_conn.flush()
                         bytes_since_flush = 0
@@ -503,6 +539,10 @@ def upload_sd_file():
                 except Exception:
                     pass
                 end_ok = True
+                try:
+                    logger.info(f"SD 업로드 완료: {remote_name} ({total_bytes} bytes, {sent_chunks} 청크)")
+                except Exception:
+                    pass
             finally:
                 pc.sync_mode = False
 
