@@ -58,6 +58,24 @@ class DataCollectionModule:
                 buf = list(getattr(pc, '_sd_list_buffer', []) or [])
                 files = []
                 i = 0
+                def _extract_size(text: str):
+                    try:
+                        # 1) 끝부분에 숫자만 오는 형식: NAME 12345
+                        m = re.search(r"(\d+)\s*(?:bytes?)?\s*$", text, re.I)
+                        if m:
+                            return int(m.group(1))
+                        # 2) SIZE:12345 또는 SIZE=12345
+                        m2 = re.search(r"\bsize\s*[:=]\s*(\d+)", text, re.I)
+                        if m2:
+                            return int(m2.group(1))
+                        # 3) 라인 내 마지막 정수
+                        m3 = re.findall(r"(\d+)", text)
+                        if m3:
+                            return int(m3[-1])
+                    except Exception:
+                        pass
+                    return None
+
                 while i < len(buf):
                     s = (buf[i] or '').strip()
                     i += 1
@@ -70,11 +88,14 @@ class DataCollectionModule:
                     if s.lower().startswith('long filename:'):
                         continue
                     # 기본(short) 항목 파싱 (NAME [SIZE])
-                    short_name = s; size = None
-                    parts = s.split()
-                    if len(parts) >= 2 and parts[-1].isdigit():
-                        size = int(parts[-1])
-                        short_name = ' '.join(parts[:-1])
+                    short_name = s
+                    size = _extract_size(s)
+                    if size is not None:
+                        # size 토큰 제거한 이름 재구성(가능하면)
+                        try:
+                            short_name = s[:s.lower().rfind(str(size))].strip()
+                        except Exception:
+                            pass
                     # 이어지는 라인이 Long filename 이면 대체
                     long_name = None
                     if i < len(buf):
