@@ -67,14 +67,6 @@ class DataCollectionModule:
 
         if pc.error_pattern.search(line):
             pc.logger.error(f"프린터 오류: {line}")
-            try:
-                # 'No Checksum with line number' 감지 시 자동 리셋
-                low = line.lower()
-                if 'no checksum with line number' in low:
-                    if hasattr(pc, 'control') and pc.control:
-                        pc.control._auto_reset_line_number_mode()
-            except Exception:
-                pass
             pc._set_state(pc.PrinterState.ERROR)
             pc._trigger_callback('on_error', line)
 
