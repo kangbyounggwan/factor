@@ -146,6 +146,13 @@ class ControlModule:
         - 사용페이지/위치: REST `/api/printer/command`, SocketIO `send_gcode`
         """
         pc = self.pc
+        # 업로드/동기화 중 전면 차단 게이트
+        try:
+            if getattr(pc, 'tx_inhibit', False):
+                pc.logger.debug(f"[TX_INHIBIT] drop: {command}")
+                return False
+        except Exception:
+            pass
         if not pc.connected:
             pc.logger.warning("프린터가 연결되지 않음")
             return False

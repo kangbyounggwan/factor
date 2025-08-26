@@ -554,7 +554,7 @@ def upload_sd_file():
         except Exception:
             pass
 
-        # 강화 옵션: 업로드 중 임의 명령 큐잉 차단
+        # 강화 옵션: 업로드 중 임의 명령 큐잉 차단 + 전면 TX inhibit 게이트
         orig_send = getattr(pc.control, 'send_command', None) if hasattr(pc, 'control') and pc.control else None
         def _blocked_send(_cmd: str, priority: bool = False) -> bool:
             return False
@@ -563,6 +563,11 @@ def upload_sd_file():
                 pc.control.send_command = _blocked_send  # type: ignore[attr-defined]
             except Exception:
                 pass
+        # 전면 차단 게이트 on
+        try:
+            setattr(pc, 'tx_inhibit', True)
+        except Exception:
+            pass
 
         def _restore_polling_and_send():
             try:
@@ -577,6 +582,11 @@ def upload_sd_file():
                     pc.control.send_command = orig_send  # type: ignore[attr-defined]
                 except Exception:
                     pass
+            # 전면 차단 게이트 off
+            try:
+                setattr(pc, 'tx_inhibit', False)
+            except Exception:
+                pass
 
         # 업로드 전 프린터 유휴 대기(M400)
         try:
@@ -681,6 +691,11 @@ def upload_sd_file():
                     pass
                 # End write (분리된 라인 보장을 위해 선행 개행 추가)
                 pc.serial_conn.write(b"\nM29\n"); pc.serial_conn.flush()
+                # M29 전송 후 500ms 대기(장치가 파일 닫기 처리할 여유)
+                try:
+                    _t.sleep(0.5)
+                except Exception:
+                    pass
                 # Handshake: 저장 완료 응답 대기
                 try:
                     end2 = _t.time() + 5.0
@@ -706,6 +721,11 @@ def upload_sd_file():
                         # ok 또는 오류 라인 모두 소거. ok를 받으면 종료
                         if s2.startswith('ok'):
                             break
+                except Exception:
+                    pass
+                # 입력 버퍼 정리(잔여 ok/error 제거)
+                try:
+                    pc.serial_conn.reset_input_buffer()
                 except Exception:
                     pass
                 end_ok = True
