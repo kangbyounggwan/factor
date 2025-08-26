@@ -385,6 +385,14 @@ def list_sd_files():
         if not fc or not hasattr(fc, 'printer_comm'):
             return jsonify({'success': False, 'error': 'Factor client not available'}), 503
         pc = fc.printer_comm
+        # cooling/finishing 단계 차단
+        try:
+            if hasattr(pc, 'control') and pc.control:
+                phase = pc.control.get_phase_snapshot().get('phase', 'unknown')
+                if phase in ('finishing', 'cooling'):
+                    return jsonify({'success': False, 'error': 'Printer is cooling/finishing'}), 409
+        except Exception:
+            pass
 
         # SD 초기화(가능한 경우)
         try:
@@ -412,6 +420,14 @@ def upload_sd_file():
         if not fc or not hasattr(fc, 'printer_comm'):
             return jsonify({'success': False, 'error': 'Factor client not available'}), 503
         pc = fc.printer_comm
+        # cooling/finishing 단계 차단
+        try:
+            if hasattr(pc, 'control') and pc.control:
+                phase = pc.control.get_phase_snapshot().get('phase', 'unknown')
+                if phase in ('finishing', 'cooling'):
+                    return jsonify({'success': False, 'error': 'Printer is cooling/finishing'}), 409
+        except Exception:
+            pass
 
         if 'file' not in request.files:
             return jsonify({'success': False, 'error': 'file field missing'}), 400
@@ -479,6 +495,12 @@ def upload_sd_file():
             except Exception:
                 temp_path = None
                 total_target = None
+
+        # 업로드 전 프린터 유휴 대기(M400)
+        try:
+            pc.send_command_and_wait('M400', timeout=5.0)
+        except Exception:
+            pass
 
         with pc.serial_lock:
             pc.sync_mode = False  # RX 워커가 busy:/ok 등을 계속 소비하도록 유지

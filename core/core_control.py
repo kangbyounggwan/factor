@@ -272,6 +272,13 @@ class ControlModule:
 
     def get_phase_snapshot(self):
         pc = self.pc
+        # 프린터 상위 상태가 취소/마무리 단계면 우선 반환
+        try:
+            st = getattr(pc, 'state', None)
+            if st and getattr(st, 'name', '').lower() in ('cancelling', 'finishing'):
+                return {'phase': 'finishing', 'since': time.time()}
+        except Exception:
+            pass
         tracker = getattr(pc, 'phase_tracker', None)
         if not tracker:
             return {'phase': 'unknown', 'since': 0}
@@ -308,9 +315,73 @@ class ControlModule:
                 pc._set_state(pc.state.__class__.CANCELLING)
             except Exception:
                 pass
+
+            # 쿨링 완료 감시 쓰레드 시작(비차단)
+            try:
+                t = threading.Thread(target=self._cooling_watchdog, kwargs={
+                    'hotend_threshold': 50.0,
+                    'bed_threshold': 40.0,
+                    'check_interval': 5.0,
+                    'timeout_sec': 1800.0,
+                }, daemon=True)
+                t.start()
+            except Exception:
+                pass
             return True
         except Exception:
             return False
+
+    def _cooling_watchdog(self, hotend_threshold: float = 50.0, bed_threshold: float = 40.0,
+                           check_interval: float = 5.0, timeout_sec: float = 1800.0):
+        """쿨링 완료 시 로그 출력(비차단 감시).
+
+        - 조건: 첫 번째 툴(actual) ≤ hotend_threshold, 베드(actual) ≤ bed_threshold (베드가 존재할 때)
+        - 타임아웃: timeout_sec 후 미도달 시 경고 로그
+        """
+        pc = self.pc
+        start_ts = time.time()
+        try:
+            pc.logger.info("쿨링 진행 중… (노즐≤%.0f°C, 베드≤%.0f°C)" % (hotend_threshold, bed_threshold))
+        except Exception:
+            pass
+        while True:
+            try:
+                # 온도 정보 갱신
+                ti = None
+                try:
+                    ti = pc.collector.get_temperature_info()
+                except Exception:
+                    ti = None
+                hot = None; bed = None
+                if ti:
+                    # tool dict에서 첫 번째 항목 사용
+                    tool_dict = getattr(ti, 'tool', None) or {}
+                    if isinstance(tool_dict, dict) and tool_dict:
+                        first_key = list(tool_dict.keys())[0]
+                        tool0 = tool_dict.get(first_key)
+                        hot = getattr(tool0, 'actual', None)
+                    bed_info = getattr(ti, 'bed', None)
+                    if bed_info is not None:
+                        bed = getattr(bed_info, 'actual', None)
+                # 판정
+                hot_ok = (hot is None) or (float(hot) <= float(hotend_threshold))
+                bed_ok = (bed is None) or (float(bed) <= float(bed_threshold))
+                if hot_ok and bed_ok:
+                    try:
+                        pc.logger.info("쿨링 완료")
+                    except Exception:
+                        pass
+                    return
+                if (time.time() - start_ts) > timeout_sec:
+                    try:
+                        pc.logger.warning("쿨링 완료 타임아웃")
+                    except Exception:
+                        pass
+                    return
+            except Exception:
+                # 오류 시 잠시 대기 후 재시도
+                pass
+            time.sleep(max(1.0, float(check_interval)))
 
     def clear_command_queue(self) -> bool:
         """송신 대기 큐를 즉시 비움(인플라이트는 건드리지 않음)
