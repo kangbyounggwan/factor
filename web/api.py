@@ -693,6 +693,21 @@ def upload_sd_file():
                             break
                 except Exception:
                     pass
+                # 추가 보호: 저장 종료 직후 라인번호/체크섬 대기 상태 초기화(M110 N0) 및 짧은 드레인
+                try:
+                    _t.sleep(0.05)
+                    pc.serial_conn.write(b"\nM110 N0\n"); pc.serial_conn.flush()
+                    end3 = _t.time() + 1.0
+                    while _t.time() < end3:
+                        l2 = pc.serial_conn.readline()
+                        if not l2:
+                            _t.sleep(0.01); continue
+                        s2 = l2.decode('utf-8', errors='ignore').strip().lower()
+                        # ok 또는 오류 라인 모두 소거. ok를 받으면 종료
+                        if s2.startswith('ok'):
+                            break
+                except Exception:
+                    pass
                 end_ok = True
                 try:
                     (current_app.logger if hasattr(current_app, 'logger') else logger).info(
