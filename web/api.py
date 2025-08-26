@@ -612,9 +612,9 @@ def upload_sd_file():
                 except Exception:
                     pass
 
-                # 1KB 청크로 전송, 32KB마다 flush + 짧은 sleep (버퍼 압박/지연 완화)
+                # 8KB 청크로 전송, 64KB마다 flush + 짧은 sleep (버퍼 압박/지연 완화)
                 bytes_since_flush = 0
-                CHUNK = 4096
+                CHUNK = 8192
                 sent_chunks = 0
                 total_chunks = (int((total_target + CHUNK - 1) / CHUNK) if total_target is not None else None)
                 try:
@@ -666,7 +666,7 @@ def upload_sd_file():
                     except Exception:
                         pass
 
-                    if bytes_since_flush >= 32768:  # 8KB -> 32KB
+                    if bytes_since_flush >= 65536:  # 64KB
                         pc.serial_conn.flush()
                         bytes_since_flush = 0
                         _t.sleep(0.002)
