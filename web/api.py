@@ -28,15 +28,40 @@ def get_status():
         if not factor_client:
             return jsonify({'error': 'Factor client not available'}), 503
         
-        status_data = {
-            'printer_status': factor_client.get_printer_status().to_dict(),
-            'temperature_info': factor_client.get_temperature_info().to_dict(),
-            'position': factor_client.get_position().to_dict(),
-            'progress': factor_client.get_print_progress().to_dict(),
-            'system_info': factor_client.get_system_info().to_dict(),
-            'connected': factor_client.is_connected(),
-            'timestamp': factor_client.last_heartbeat
-        }
+        # 업로드 보호 중엔 M105/M114 동기 질의를 피하고 캐시 값 반환
+        uploading = bool(getattr(factor_client, '_upload_guard_active', False))
+        if uploading and getattr(factor_client, 'printer_comm', None):
+            pc = factor_client.printer_comm
+            temp_dict = {}
+            try:
+                last_temp = getattr(pc, '_last_temp_info', None)
+                temp_dict = last_temp.to_dict() if last_temp else {'tool': {}, 'bed': {}}
+            except Exception:
+                temp_dict = {'tool': {}, 'bed': {}}
+            pos_dict = {}
+            try:
+                pos_dict = pc.current_position.to_dict()
+            except Exception:
+                pos_dict = {'x': 0, 'y': 0, 'z': 0, 'e': 0}
+            status_data = {
+                'printer_status': factor_client.get_printer_status().to_dict(),
+                'temperature_info': temp_dict,
+                'position': pos_dict,
+                'progress': factor_client.get_print_progress().to_dict(),
+                'system_info': factor_client.get_system_info().to_dict(),
+                'connected': factor_client.is_connected(),
+                'timestamp': factor_client.last_heartbeat
+            }
+        else:
+            status_data = {
+                'printer_status': factor_client.get_printer_status().to_dict(),
+                'temperature_info': factor_client.get_temperature_info().to_dict(),
+                'position': factor_client.get_position().to_dict(),
+                'progress': factor_client.get_print_progress().to_dict(),
+                'system_info': factor_client.get_system_info().to_dict(),
+                'connected': factor_client.is_connected(),
+                'timestamp': factor_client.last_heartbeat
+            }
         
         return jsonify(status_data)
         
@@ -68,9 +93,17 @@ def get_temperature():
         factor_client = current_app.factor_client
         if not factor_client:
             return jsonify({'error': 'Factor client not available'}), 503
-        
-        temp_info = factor_client.get_temperature_info()
-        return jsonify(temp_info.to_dict())
+        # 업로드 보호 중엔 캐시 사용(동기 M105 회피)
+        if getattr(factor_client, '_upload_guard_active', False) and getattr(factor_client, 'printer_comm', None):
+            pc = factor_client.printer_comm
+            try:
+                last_temp = getattr(pc, '_last_temp_info', None)
+                return jsonify((last_temp.to_dict() if last_temp else {'tool': {}, 'bed': {}}))
+            except Exception:
+                return jsonify({'tool': {}, 'bed': {}})
+        else:
+            temp_info = factor_client.get_temperature_info()
+            return jsonify(temp_info.to_dict())
         
     except Exception as e:
         logger.error(f"온도 정보 조회 오류: {e}")
@@ -84,9 +117,16 @@ def get_position():
         factor_client = current_app.factor_client
         if not factor_client:
             return jsonify({'error': 'Factor client not available'}), 503
-        
-        position = factor_client.get_position()
-        return jsonify(position.to_dict())
+        # 업로드 보호 중엔 캐시 사용(동기 M114 회피)
+        if getattr(factor_client, '_upload_guard_active', False) and getattr(factor_client, 'printer_comm', None):
+            pc = factor_client.printer_comm
+            try:
+                return jsonify(pc.current_position.to_dict())
+            except Exception:
+                return jsonify({'x': 0, 'y': 0, 'z': 0, 'e': 0})
+        else:
+            position = factor_client.get_position()
+            return jsonify(position.to_dict())
         
     except Exception as e:
         logger.error(f"위치 정보 조회 오류: {e}")
@@ -503,6 +543,7 @@ def upload_sd_file():
         try:
             fc.temp_poll_interval = 1e9
             fc.position_poll_interval = 1e9
+            setattr(fc, '_upload_guard_active', True)
             (current_app.logger if hasattr(current_app, 'logger') else logger).info("업로드 보호: 폴링 일시정지 시작")
         except Exception:
             pass
@@ -530,6 +571,7 @@ def upload_sd_file():
             try:
                 fc.temp_poll_interval = orig_temp
                 fc.position_poll_interval = orig_pos
+                setattr(fc, '_upload_guard_active', False)
                 (current_app.logger if hasattr(current_app, 'logger') else logger).info("업로드 보호: 폴링 재개")
             except Exception:
                 pass
@@ -575,9 +617,9 @@ def upload_sd_file():
                 except Exception:
                     pass
 
-                # 1KB 청크로 전송, 8KB마다 flush + 짧은 sleep (버퍼 압박/지연 완화)
+                # 1KB 청크로 전송, 32KB마다 flush + 짧은 sleep (버퍼 압박/지연 완화)
                 bytes_since_flush = 0
-                CHUNK = 1024
+                CHUNK = 4096
                 sent_chunks = 0
                 total_chunks = (int((total_target + CHUNK - 1) / CHUNK) if total_target is not None else None)
                 try:
@@ -629,10 +671,10 @@ def upload_sd_file():
                     except Exception:
                         pass
 
-                    if bytes_since_flush >= 8192:  # 8KB
+                    if bytes_since_flush >= 32768:  # 8KB -> 32KB
                         pc.serial_conn.flush()
                         bytes_since_flush = 0
-                        _t.sleep(0.001)
+                        _t.sleep(0.002)
 
                 pc.serial_conn.flush()
                 # End write
