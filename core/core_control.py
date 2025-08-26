@@ -332,11 +332,16 @@ class ControlModule:
             return False
 
     def _cooling_watchdog(self, hotend_threshold: float = 50.0, bed_threshold: float = 40.0,
-                           check_interval: float = 5.0, timeout_sec: float = 1800.0):
+                           check_interval: float = 5.0, timeout_sec: float = 1800.0,
+                           stable_seconds: float = 7.0):
         """쿨링 완료 시 로그 출력(비차단 감시).
 
-        - 조건: 첫 번째 툴(actual) ≤ hotend_threshold, 베드(actual) ≤ bed_threshold (베드가 존재할 때)
-        - 타임아웃: timeout_sec 후 미도달 시 경고 로그
+        완료 조건(둘 다 충족):
+          1) 타겟 온도가 0 (노즐/베드)
+          2) 현재 온도가 임계치 이하 (노즐 < hotend_threshold, 베드 < bed_threshold)
+          3) 위 상태가 stable_seconds 동안 연속 유지
+
+        타임아웃: timeout_sec 후 미도달 시 경고 로그
         """
         pc = self.pc
         start_ts = time.time()
@@ -344,6 +349,7 @@ class ControlModule:
             pc.logger.info("쿨링 진행 중… (노즐≤%.0f°C, 베드≤%.0f°C)" % (hotend_threshold, bed_threshold))
         except Exception:
             pass
+        last_ok_ts = None
         while True:
             try:
                 # 온도 정보 갱신
@@ -352,7 +358,7 @@ class ControlModule:
                     ti = pc.collector.get_temperature_info()
                 except Exception:
                     ti = None
-                hot = None; bed = None
+                hot = None; hot_t = None; bed = None; bed_t = None
                 if ti:
                     # tool dict에서 첫 번째 항목 사용
                     tool_dict = getattr(ti, 'tool', None) or {}
@@ -360,18 +366,30 @@ class ControlModule:
                         first_key = list(tool_dict.keys())[0]
                         tool0 = tool_dict.get(first_key)
                         hot = getattr(tool0, 'actual', None)
+                        hot_t = getattr(tool0, 'target', None)
                     bed_info = getattr(ti, 'bed', None)
                     if bed_info is not None:
                         bed = getattr(bed_info, 'actual', None)
+                        bed_t = getattr(bed_info, 'target', None)
                 # 판정
-                hot_ok = (hot is None) or (float(hot) <= float(hotend_threshold))
-                bed_ok = (bed is None) or (float(bed) <= float(bed_threshold))
-                if hot_ok and bed_ok:
+                def to_float(v):
                     try:
-                        pc.logger.info("쿨링 완료")
+                        return float(v)
                     except Exception:
-                        pass
-                    return
+                        return None
+                hot_ok = ((hot_t is None) or to_float(hot_t) == 0.0) and ((hot is None) or (to_float(hot) is not None and to_float(hot) <= float(hotend_threshold)))
+                bed_ok = ((bed_t is None) or to_float(bed_t) == 0.0) and ((bed is None) or (to_float(bed) is not None and to_float(bed) <= float(bed_threshold)))
+                if hot_ok and bed_ok:
+                    if last_ok_ts is None:
+                        last_ok_ts = time.time()
+                    if (time.time() - last_ok_ts) >= stable_seconds:
+                        try:
+                            pc.logger.info("쿨링 완료")
+                        except Exception:
+                            pass
+                        return
+                else:
+                    last_ok_ts = None
                 if (time.time() - start_ts) > timeout_sec:
                     try:
                         pc.logger.warning("쿨링 완료 타임아웃")
