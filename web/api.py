@@ -12,9 +12,6 @@ import re
 from typing import Dict, Any, List
 import time
 import os
-import io
-import zipfile
-import gzip
 
 api_bp = Blueprint('api', __name__)
 logger = logging.getLogger('api')
@@ -612,18 +609,16 @@ def upload_sd_file():
             pc.sync_mode = True
             try:
                 # 절충: 업로드 시작 전 혹시 모를 SD 인쇄/오토스타트 중단 → SD 초기화 → 진입
-                try:
-                    pc.serial_conn.write(b"M25\n"); pc.serial_conn.flush(); _t.sleep(0.05)  # SD print pause
-                except Exception:
-                    pass
-                try:
-                    pc.serial_conn.write(b"M524\n"); pc.serial_conn.flush(); _t.sleep(0.05)  # Abort SD print
-                except Exception:
-                    pass
-                try:
-                    pc.serial_conn.write(b"M21\n"); pc.serial_conn.flush(); _t.sleep(0.15)  # SD init (오토스타트 회피는 M524 선행)
-                except Exception:
-                    pass
+
+                pc.serial_conn.write(b"M21\n"); pc.serial_conn.flush(); _t.sleep(0.1)
+                pc.serial_conn.write(b"M27\n"); pc.serial_conn.flush()
+                if wait_for_regex(r'sd printing byte', timeout=1.0):
+                    pc.serial_conn.write(b"M524\n"); pc.serial_conn.flush()
+                    wait_ok(2.0)
+                    # 필요하면 재마운트
+                    pc.serial_conn.write(b"M22\n"); pc.serial_conn.flush(); wait_ok(2.0)
+                    pc.serial_conn.write(b"M21\n"); pc.serial_conn.flush(); wait_ok(2.0)
+                    
                 # Begin write (진입)
                 pc.serial_conn.write((f"M28 {remote_name}\n").encode('utf-8'))
                 pc.serial_conn.flush(); _t.sleep(0.05)
@@ -856,43 +851,7 @@ def clear_printer_queue():
         return jsonify({'success': False, 'error': str(e)}), 500
 @api_bp.route('/printer/tx-window', methods=['GET'])
 def get_tx_window():
-    """현재 G-code 송신 윈도우(인플라이트/대기열) 스냅샷
-    - 사용처: /dashboard 진행률 아래의 송신 로그 패널
-    """
-    try:
-        factor_client = current_app.factor_client
-        if not factor_client or not hasattr(factor_client, 'printer_comm'):
-            return jsonify({'window_size': 0, 'inflight': [], 'pending_next': []})
-        pc = factor_client.printer_comm
-        # 1) Async TX 브리지 사용 시 정식 스냅샷
-        if hasattr(pc, 'control') and pc.control and getattr(pc, 'tx_bridge', None):
-            snap = pc.control.get_tx_window_snapshot()
-            return jsonify(snap)
-        # 2) Fallback: 동기 경로일 때, 최근 전송 스냅샷(TX_WINDOW_SNAP)을 노출
-        try:
-            snap = current_app.config.get('TX_WINDOW_SNAP', None)
-            if isinstance(snap, dict):
-                w = snap.get('window_size', getattr(pc, 'window_size', 15))
-                inflight = snap.get('inflight', [])
-                pending = snap.get('pending_next', [])
-                return jsonify({'window_size': w, 'inflight': inflight[-w:], 'pending_next': pending})
-        except Exception:
-            pass
-
-        # 3) 최후 대안: 내부 command_queue를 이용해 대기열만 노출
-        pending = []
-        try:
-            q = getattr(pc, 'command_queue', None)
-            if q is not None and hasattr(q, 'queue'):
-                items = list(q.queue)  # type: ignore[attr-defined]
-                for i, line in enumerate(items[:15]):
-                    pending.append({'id': i + 1, 'line': str(line)})
-        except Exception:
-            pass
-        return jsonify({'window_size': getattr(pc, 'window_size', 15), 'inflight': [], 'pending_next': pending})
-    except Exception as e:
-        logger.error(f"송신 윈도우 조회 오류: {e}")
-        return jsonify({'window_size': 0, 'inflight': [], 'pending_next': []})
+    return jsonify({'window_size': 0, 'inflight': [], 'pending_next': []})
 
 
 @api_bp.route('/printer/phase', methods=['GET'])
@@ -916,95 +875,7 @@ def get_printer_phase():
         return jsonify({'phase': 'unknown', 'since': 0})
 
 
-# ===== UFP 업로드 프리뷰(자동 인쇄 금지) =====
-UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'uploads')
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-
-def _find_gcode_in_ufp(zf: zipfile.ZipFile) -> (str, bool):
-    gname = None; gz = False
-    for name in zf.namelist():
-        if name.lower().endswith('.gcode'):
-            return name, False
-    for name in zf.namelist():
-        if name.lower().endswith('.gcode.gz'):
-            return name, True
-    return None, False
-
-@api_bp.route('/ufp/upload', methods=['POST'])
-def upload_ufp_only():
-    """UFP/G-code 업로드만 수행(프린트 시작하지 않음) → 업로드 토큰 반환
-    프론트는 이 토큰으로 프리뷰 API 호출
-    """
-    try:
-        if 'file' not in request.files:
-            return jsonify({'success': False, 'error': 'file field missing'}), 400
-        file = request.files['file']
-        if file.filename == '':
-            return jsonify({'success': False, 'error': 'no filename'}), 400
-
-        fname = file.filename
-        lower = fname.lower()
-        allowed = (
-            lower.endswith('.ufp') or
-            lower.endswith('.gcode') or
-            lower.endswith('.gcode.gz')
-        )
-        if not allowed:
-            return jsonify({'success': False, 'error': 'only .ufp, .gcode, .gcode.gz allowed'}), 400
-
-        save_path = os.path.join(UPLOAD_DIR, fname)
-        file.save(save_path)
-        return jsonify({'success': True, 'token': fname})
-    except Exception as e:
-        logger.error(f"UFP/G-code 업로드 오류: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@api_bp.route('/ufp/preview/<token>', methods=['GET'])
-def preview_ufp(token: str):
-    """UFP 내부의 G-code 일부 또는 G-code 파일 일부(앞부분)를 미리보기용으로 반환"""
-    try:
-        path = os.path.join(UPLOAD_DIR, token)
-        if not os.path.exists(path):
-            return jsonify({'success': False, 'error': 'token not found'}), 404
-
-        lower = token.lower()
-        head_lines: List[str] = []
-
-        # 1) UFP 컨테이너 처리
-        if lower.endswith('.ufp'):
-            with zipfile.ZipFile(path, 'r') as zf:
-                gname, gz = _find_gcode_in_ufp(zf)
-                if not gname:
-                    return jsonify({'success': False, 'error': 'gcode not found in ufp'}), 400
-                f = zf.open(gname, 'r')
-                stream = io.TextIOWrapper(
-                    gzip.GzipFile(fileobj=f), encoding='utf-8', errors='ignore'
-                ) if gz else io.TextIOWrapper(f, encoding='utf-8', errors='ignore')
-                for _ in range(200):
-                    try:
-                        line = next(stream)
-                    except StopIteration:
-                        break
-                    head_lines.append(line.rstrip('\n'))
-            return jsonify({'success': True, 'token': token, 'gcode_name': gname, 'gcode_head': head_lines})
-
-        # 2) Raw G-code(.gcode / .gcode.gz) 처리
-        if lower.endswith('.gcode.gz'):
-            open_stream = lambda p: gzip.open(p, 'rt', encoding='utf-8', errors='ignore')
-        else:
-            open_stream = lambda p: open(p, 'r', encoding='utf-8', errors='ignore')
-
-        with open_stream(path) as stream:
-            for _ in range(200):
-                line = stream.readline()
-                if not line:
-                    break
-                head_lines.append(line.rstrip('\n'))
-
-        return jsonify({'success': True, 'token': token, 'gcode_name': token, 'gcode_head': head_lines})
-    except Exception as e:
-        logger.error(f"UFP/G-code 프리뷰 오류: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+# UFP 업로드/프리뷰 및 관련 유틸 제거됨
 
 
 # 핫스팟 관련 API
