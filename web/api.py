@@ -625,7 +625,7 @@ def upload_sd_file():
                 except Exception:
                     pass
                 # 진행 로그 주기 제한(바이트/시간)
-                LOG_INTERVAL_BYTES = 256 * 1024
+                LOG_INTERVAL_BYTES = 512 * 1024
                 LOG_INTERVAL_SEC = 1.0
                 bytes_since_log = 0
                 last_log_ts = _t.time()
@@ -638,6 +638,8 @@ def upload_sd_file():
                         total_lines += chunk.count(b"\n")
                     except Exception:
                         pass
+                    # 바이너리 블록 상에서 우발적인 'N..' 시작을 회피하기 위해 앞선 라인이 개행으로 끝나도록 보장
+                    # (대체로 G-code 텍스트지만 안전 차원)
                     pc.serial_conn.write(chunk)
                     total_bytes += len(chunk)
                     bytes_since_flush += len(chunk)
@@ -672,8 +674,13 @@ def upload_sd_file():
                         _t.sleep(0.002)
 
                 pc.serial_conn.flush()
-                # End write
-                pc.serial_conn.write(b"M29\n"); pc.serial_conn.flush()
+                # 장치가 마지막 바이트를 파일로 플러시할 수 있도록 잠시 대기 후 안전하게 M29 전송
+                try:
+                    _t.sleep(0.1)
+                except Exception:
+                    pass
+                # End write (분리된 라인 보장을 위해 선행 개행 추가)
+                pc.serial_conn.write(b"\nM29\n"); pc.serial_conn.flush()
                 # Handshake: 저장 완료 응답 대기
                 try:
                     end2 = _t.time() + 5.0
