@@ -55,20 +55,35 @@ class DataCollectionModule:
                 return
             if llow.startswith('end file list'):
                 pc._sd_list_capturing = False
+                buf = list(getattr(pc, '_sd_list_buffer', []) or [])
                 files = []
-                for raw in getattr(pc, '_sd_list_buffer', []) or []:
-                    s = (raw or '').strip()
+                i = 0
+                while i < len(buf):
+                    s = (buf[i] or '').strip()
+                    i += 1
                     if not s or s.lower() in ('ok',):
                         continue
                     # 디렉터리 라인 무시(펌웨어별 출력 포맷 다양)
                     if s.endswith('/') or s.endswith('\\'):
                         continue
-                    name = s; size = None
+                    # Long filename 라인은 별도 처리
+                    if s.lower().startswith('long filename:'):
+                        continue
+                    # 기본(short) 항목 파싱 (NAME [SIZE])
+                    short_name = s; size = None
                     parts = s.split()
                     if len(parts) >= 2 and parts[-1].isdigit():
                         size = int(parts[-1])
-                        name = ' '.join(parts[:-1])
-                    files.append({'name': name, 'size': size})
+                        short_name = ' '.join(parts[:-1])
+                    # 이어지는 라인이 Long filename 이면 대체
+                    long_name = None
+                    if i < len(buf):
+                        nxt = (buf[i] or '').strip()
+                        if nxt.lower().startswith('long filename:'):
+                            long_name = nxt.split(':', 1)[1].strip().strip('"')
+                            i += 1
+                    file_name = long_name if long_name else short_name
+                    files.append({'name': file_name, 'size': size})
                 pc.sd_card_info = {'files': files, 'last_update': time.time()}
                 pc._sd_list_buffer = []
                 return

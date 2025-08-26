@@ -427,28 +427,40 @@ def upload_sd_file():
         if not remote_name:
             return jsonify({'success': False, 'error': 'invalid remote name'}), 400
 
-        # SD 초기화 시도
-        try:
-            pc.send_command('M21')
-        except Exception:
-            pass
-
-        # 업로드 시작
-        pc.send_command_and_wait(f'M28 {remote_name}', timeout=5.0)
-
-        # 라인 단위로 기록
+        # 직접 시리얼에 동기 기록하여 큐 선행/경합 방지
         import io as _io
+        import time as _t
         total_lines = 0
         total_bytes = 0
+        if not pc.connected or not (pc.serial_conn and pc.serial_conn.is_open):
+            return jsonify({'success': False, 'error': 'printer not connected'}), 503
         text_stream = _io.TextIOWrapper(upfile.stream, encoding='utf-8', errors='ignore')
-        for raw in text_stream:
-            line = raw.rstrip('\r\n')
-            pc.send_command(line)
-            total_lines += 1
-            total_bytes += len(raw.encode('utf-8', errors='ignore'))
 
-        # 업로드 종료
-        end_ok = pc.send_command_and_wait('M29', timeout=8.0)
+        with pc.serial_lock:
+            pc.sync_mode = True
+            try:
+                # SD init
+                pc.serial_conn.write(b"M21\n"); pc.serial_conn.flush()
+                _t.sleep(0.05)
+                # Begin write
+                pc.serial_conn.write((f"M28 {remote_name}\n").encode('utf-8')); pc.serial_conn.flush()
+                _t.sleep(0.05)
+                # Stream file
+                for i, raw in enumerate(text_stream):
+                    line = raw.rstrip('\r\n') + "\n"
+                    pc.serial_conn.write(line.encode('utf-8', errors='ignore'))
+                    total_lines += 1
+                    total_bytes += len(raw.encode('utf-8', errors='ignore'))
+                    if (i % 400) == 0:
+                        pc.serial_conn.flush()
+                        # 약간의 휴식으로 시리얼 버퍼 보호
+                        _t.sleep(0.002)
+                pc.serial_conn.flush()
+                # End write
+                pc.serial_conn.write(b"M29\n"); pc.serial_conn.flush()
+                end_ok = True
+            finally:
+                pc.sync_mode = False
 
         # 목록 갱신 시도
         try:
