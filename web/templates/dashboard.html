@@ -418,15 +418,7 @@
                     </div>
                 </div>
                 
-                <div class="temperature-chart">
-                    <h3>UFP 프리뷰</h3>
-                    <div class="chart-container" style="display:flex; gap:16px;">
-                        <div style="flex:1; overflow:auto;">
-                            <h4 style="margin-bottom:8px;">G-code 미리보기(처음 200줄)</h4>
-                            <pre id="ufp-gcode-head" style="height:420px; overflow:auto; background:#1f2937; color:#e5e7eb; padding:12px; border-radius:8px;"></pre>
-                        </div>
-                    </div>
-                </div>
+                
                 
                 <div class="progress-section">
                     <h3>프린트 진행률</h3>
@@ -437,16 +429,7 @@
                         <span id="progress-time">시간: --:-- / --:--</span>
                         <span id="progress-layers">레이어: -- / --</span>
                     </div>
-                    <div style="display:flex; gap:12px; margin-top:12px;">
-                        <div style="flex:1;">
-                            <h4 style="margin-bottom:8px;color:#333;">현재 전송 중(Inflight)</h4>
-                            <div id="tx-inflight" class="log-container" style="height:140px;"></div>
-                        </div>
-                        <div style="flex:1;">
-                            <h4 style="margin-bottom:8px;color:#333;">다음 전송 대기(Pending)</h4>
-                            <div id="tx-pending" class="log-container" style="height:140px;"></div>
-                        </div>
-                    </div>
+                    
                 </div>
             </div>
             
@@ -471,16 +454,7 @@
                     <button class="btn" onclick="refreshStatus()">상태 새로고침</button>
                 </div>
 
-                <div class="control-panel">
-                    <h3>UFP 업로드 / 인쇄</h3>
-                    <div class="control-group">
-                        <label for="ufp-file">파일 선택 (.ufp, .gcode, .gcode.gz)</label>
-                        <input type="file" id="ufp-file" accept=".ufp,.gcode,.gcode.gz">
-                    </div>
-                    <button class="btn" onclick="uploadUfpOnly()">업로드</button>
-                    <button class="btn" onclick="startPrintFromUploaded()">업로드 & 인쇄 시작</button>
-                    <small style="color:#666;display:block;margin-top:8px;">진행 상황은 우측 시스템 로그에서 확인하세요.</small>
-                </div>
+                
                 
                 <div class="log-section">
                     <h3>시스템 로그</h3>
@@ -502,12 +476,12 @@
         document.addEventListener('DOMContentLoaded', function() {
             loadStatus();
             loadLogs();
-            loadTxWindow();
+            
             
             // 3초마다 상태 업데이트
             statusUpdateInterval = setInterval(loadStatus, 3000);
             phaseUpdateInterval = setInterval(loadPhase, 1000);
-            setInterval(loadTxWindow, 1000);
+            
             
             // 2초마다 로그 업데이트 (진행 상황을 더 자주 표시)
             setInterval(loadLogs, 2000);
@@ -563,55 +537,7 @@
             }
         }
 
-        // 송신 윈도우 스냅샷 로드
-        async function loadTxWindow() {
-            try {
-                const res = await fetch('/api/printer/tx-window');
-                const data = await res.json();
-                updateTxWindow(data);
-            } catch (e) {
-                // 무시: 연결 전 등
-            }
-        }
-
-        function updateTxWindow(data) {
-            const inflightBox = document.getElementById('tx-inflight');
-            const pendingBox = document.getElementById('tx-pending');
-            const fmt = (item) => item && item.line ? item.line : '';
-            inflightBox.innerHTML = '';
-            (data.inflight || []).slice(0, data.window_size || 15).forEach(it => {
-                const div = document.createElement('div');
-                div.className = 'log-entry info';
-                div.textContent = fmt(it);
-                inflightBox.appendChild(div);
-            });
-            pendingBox.innerHTML = '';
-            (data.pending_next || []).slice(0, data.window_size || 15).forEach(it => {
-                const div = document.createElement('div');
-                div.className = 'log-entry';
-                div.textContent = fmt(it);
-                pendingBox.appendChild(div);
-            });
-
-            // G-code 미리보기 영역 하이라이트 업데이트(간이)
-            try {
-                const pre = document.getElementById('ufp-gcode-head');
-                const text = pre && pre.textContent ? pre.textContent.split('\n') : null;
-                const inflight = (data.inflight || []);
-                const last = inflight.length > 0 ? (inflight[inflight.length - 1].line || '') : '';
-                if (text && last) {
-                    const idx = text.findIndex(l => l.replace(/^>>\s*/, '').trim().toUpperCase() === last.trim().toUpperCase());
-                    if (idx >= 0) {
-                        const restored = text.map(l => l.replace(/^>>\s*/, ''));
-                        restored[idx] = `>> ${restored[idx]}`;
-                        pre.textContent = restored.join('\n');
-                        setTimeout(() => { try { pre.scrollTop = Math.max(0, (idx - 3) * 18); } catch (e) {} }, 0);
-                    }
-                }
-            } catch (e) {
-                // ignore
-            }
-        }
+        
         
         // 대시보드 업데이트
         function updateDashboard(data) {
@@ -943,97 +869,7 @@
             container.scrollTop = container.scrollHeight;
         }
 
-        // UFP 업로드만
-        async function uploadUfpOnly() {
-            const input = document.getElementById('ufp-file');
-            if (!input.files || input.files.length === 0) {
-                addLogEntry('UFP 파일을 선택하세요.', 'warning');
-                return;
-            }
-            const file = input.files[0];
-            const name = file.name.toLowerCase();
-            const allowed = name.endsWith('.ufp') || name.endsWith('.gcode') || name.endsWith('.gcode.gz');
-            if (!allowed) {
-                addLogEntry('허용 확장자: .ufp, .gcode, .gcode.gz', 'warning');
-                return;
-            }
-            const form = new FormData();
-            form.append('file', file);
-            try {
-                addLogEntry(`파일 업로드 시작: ${file.name}`, 'info');
-                const res = await fetch('/api/ufp/upload', { method: 'POST', body: form });
-                const data = await res.json();
-                if (res.ok && data.success) {
-                    addLogEntry('업로드 완료(인쇄 대기).', 'info');
-                    // 프리뷰 로드
-                    await loadUfpPreview(data.token);
-                } else {
-                    addLogEntry('업로드 실패: ' + (data.error || res.statusText), 'error');
-                }
-            } catch (e) {
-                addLogEntry('업로드 오류: ' + e.message, 'error');
-            }
-        }
-
-        async function loadUfpPreview(token) {
-            try {
-                const res = await fetch(`/api/ufp/preview/${encodeURIComponent(token)}`);
-                const data = await res.json();
-                if (res.ok && data.success) {
-                    const headLines = (data.gcode_head || []);
-                    const pre = document.getElementById('ufp-gcode-head');
-                    // 기본 렌더링
-                    pre.textContent = (headLines || []).join('\n') || '미리보기 없음';
-                    // 진행 중 라인 하이라이트(간이): 최근 전송 라인과 매칭
-                    try {
-                        const snapRes = await fetch('/api/printer/tx-window');
-                        const snap = await snapRes.json();
-                        const inflight = (snap && snap.inflight) ? snap.inflight : [];
-                        const last = inflight.length > 0 ? (inflight[inflight.length - 1].line || '') : '';
-                        if (last) {
-                            const idx = headLines.findIndex(l => l.trim().toUpperCase() === last.trim().toUpperCase());
-                            if (idx >= 0) {
-                                // pre 내부 하이라이트: 단순하게 선택 영역으로 스크롤
-                                const lines = headLines.slice();
-                                lines[idx] = `>> ${lines[idx]}`;
-                                pre.textContent = lines.join('\n');
-                                // 스크롤 위치 조정
-                                setTimeout(() => {
-                                    try { pre.scrollTop = (idx - 3) * 18; } catch (e) {}
-                                }, 0);
-                            }
-                        }
-                    } catch (e) {
-                        // 하이라이트 실패는 무시
-                    }
-                } else {
-                    addLogEntry('UFP 프리뷰 실패: ' + (data.error || res.statusText), 'error');
-                }
-            } catch (e) {
-                addLogEntry('UFP 프리뷰 오류: ' + e.message, 'error');
-            }
-        }
-
-        // 업로드 후 인쇄 시작(기존 /ufp 라우트 유지)
-        async function startPrintFromUploaded() {
-            const input = document.getElementById('ufp-file');
-            if (!input.files || input.files.length === 0) {
-                addLogEntry('UFP 파일을 선택하세요.', 'warning');
-                return;
-            }
-            const form = new FormData();
-            form.append('file', input.files[0]);
-            try {
-                const res = await fetch('/ufp', { method: 'POST', body: form });
-                if (res.ok) {
-                    addLogEntry('업로드 & 인쇄 시작 완료', 'info');
-                } else {
-                    addLogEntry('인쇄 시작 실패', 'error');
-                }
-            } catch (e) {
-                addLogEntry('인쇄 시작 오류: ' + e.message, 'error');
-            }
-        }
+        
     </script>
 </body>
 </html> 
