@@ -1,6 +1,6 @@
 [Unit]
 Description=Factor Client Firmware
-After=network.target
+After=network.target bluetooth.service
 Wants=bluetooth.service
 
 [Service]
@@ -9,12 +9,11 @@ User=factor
 Group=factor
 WorkingDirectory=/opt/factor-client
 ExecStart=/opt/factor-client/venv/bin/python main.py
-ExecStartPre=/bin/systemctl start bluetooth
-ExecStartPre=/bin/systemctl enable bluetooth
+# 블루투스 제어는 install.sh에서 수행하며, 서비스에서는 직접 제어하지 않습니다.
 
 Restart=always
 RestartSec=10
-ExecStopPost=/bin/systemctl restart bluetooth
+# ExecStopPost 훅 제거: 권한 문제 방지
 StandardOutput=journal
 StandardError=journal
 Environment=PYTHONUNBUFFERED=1
