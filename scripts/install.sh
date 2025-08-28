@@ -382,6 +382,45 @@ EOF
     log_info "블루투스 설정 완료"
 }
 
+# 블루투스 자동 설정 oneshot 서비스 설치
+setup_bluetooth_autoconfig_service() {
+    log_step "블루투스 자동 설정 서비스 설치 중..."
+
+    cat > /etc/systemd/system/factor-bt-setup.service << 'EOF'
+[Unit]
+Description=Factor Bluetooth post-start setup
+After=bluetooth.service
+Requires=bluetooth.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -lc '\
+  rfkill unblock bluetooth || true; \
+  hciconfig hci0 up || true; \
+  btmgmt -i hci0 le on || true; \
+  btmgmt -i hci0 bredr on || true; \
+  btmgmt -i hci0 connectable on || true; \
+  btmgmt -i hci0 advertising on || true; \
+  bluetoothctl --timeout 5 power on || true; \
+  bluetoothctl --timeout 5 agent NoInputNoOutput || true; \
+  bluetoothctl --timeout 5 default-agent || true; \
+  bluetoothctl --timeout 5 set-alias Factor-Client || true; \
+  bluetoothctl --timeout 5 pairable on || true; \
+  bluetoothctl --timeout 5 discoverable on || true; \
+  bluetoothctl --timeout 5 discoverable-timeout 0 || true'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable factor-bt-setup.service
+    # 즉시 적용
+    systemctl start factor-bt-setup.service || true
+
+    log_info "블루투스 자동 설정 서비스 설치 완료"
+}
+
 # 방화벽 설정
 setup_firewall() {
     log_step "방화벽 설정 중..."
@@ -449,6 +488,7 @@ main() {
     setup_readonly_root
     setup_usb_permissions
     setup_bluetooth
+    setup_bluetooth_autoconfig_service
     setup_service
     setup_firewall
     
@@ -463,6 +503,8 @@ main() {
         else
             log_warning "블루투스 인터페이스가 비활성화되어 있습니다. 재부팅 후 자동 활성화됩니다."
         fi
+        # 광고/발견 가능 상태 확인 힌트 출력
+        log_info "참고: bluetoothctl show 에서 Discoverable: yes, ActiveInstances > 0 이어야 검색/광고 중입니다."
     else
         log_error "블루투스 서비스가 실행되지 않고 있습니다."
         log_info "다음 명령어로 수동으로 시작할 수 있습니다:"
