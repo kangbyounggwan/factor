@@ -1,7 +1,6 @@
 [Unit]
-Description=Factor OctoPrint Client Firmware
-After=network.target bluetooth.service
-Requires=bluetooth.service
+Description=Factor Client Firmware
+After=network.target
 Wants=bluetooth.service
 
 [Service]
@@ -10,8 +9,8 @@ User=factor
 Group=factor
 WorkingDirectory=/opt/factor-client
 ExecStart=/opt/factor-client/venv/bin/python main.py
-ExecStartPre=/bin/systemctl start bluetooth
-ExecStartPre=/bin/systemctl is-active bluetooth
+# 블루투스는 선택적 의존성 (실패해도 Factor Client는 실행)
+ExecStartPre=/bin/systemctl is-active bluetooth || echo "블루투스 서비스가 비활성 상태입니다. Factor Client는 계속 실행됩니다."
 Restart=always
 RestartSec=10
 StandardOutput=journal
