@@ -26,15 +26,15 @@ printer:
   temp_poll_interval: 2.0
   position_poll_interval: 5.0
 
-# 핫스팟 설정 (라즈베리파이에서 활성화)
-hotspot:
+# 블루투스 설정 (라즈베리파이에서 활성화)
+bluetooth:
   enabled: true
-  ssid: "Factor-Client-Setup"
-  password: "factor123"
-  channel: 6
-  country_code: "US"
-  interface: "wlan0"
-  dhcp_range: "192.168.4.2,192.168.4.20,24h"
+  device_name: "Factor-Client"
+  discoverable_timeout: 0
+  pairable_timeout: 0
+  auto_enable: true
+  discovery_interval: 60
+  max_connections: 10
 
 # 데이터 수집 설정
 data_collection:

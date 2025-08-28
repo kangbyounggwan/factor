@@ -1,6 +1,8 @@
 [Unit]
 Description=Factor OctoPrint Client Firmware
-After=network.target
+After=network.target bluetooth.service
+Requires=bluetooth.service
+Wants=bluetooth.service
 
 [Service]
 Type=simple
@@ -8,6 +10,8 @@ User=factor
 Group=factor
 WorkingDirectory=/opt/factor-client
 ExecStart=/opt/factor-client/venv/bin/python main.py
+ExecStartPre=/bin/systemctl start bluetooth
+ExecStartPre=/bin/systemctl is-active bluetooth
 Restart=always
 RestartSec=10
 StandardOutput=journal
