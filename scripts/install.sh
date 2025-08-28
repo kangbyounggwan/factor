@@ -28,6 +28,14 @@ log_step() {
     echo -e "${BLUE}[STEP]${NC} $1"
 }
 
+log_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+log_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
 # 루트 권한 확인
 check_root() {
     if [[ $EUID -ne 0 ]]; then
