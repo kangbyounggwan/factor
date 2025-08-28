@@ -19,6 +19,8 @@ class HotspotManager:
         self.config_manager = config_manager
         self.logger = logging.getLogger(__name__)
         self.is_hotspot_active = False
+        
+        # 기본 핫스팟 설정
         self.hotspot_config = {
             'ssid': 'Factor-Client-Setup',
             'password': 'factor123',
@@ -27,6 +29,38 @@ class HotspotManager:
             'gateway': '192.168.4.1'
         }
         
+        # 설정 파일에서 핫스팟 설정 로드
+        self._load_hotspot_config()
+    
+    def _load_hotspot_config(self):
+        """설정 파일에서 핫스팟 설정 로드"""
+        try:
+            if self.config_manager and hasattr(self.config_manager, 'get_config'):
+                config = self.config_manager.get_config()
+                if config and 'hotspot' in config:
+                    hotspot_config = config['hotspot']
+                    
+                    # SSID 설정
+                    if 'ssid' in hotspot_config:
+                        self.hotspot_config['ssid'] = hotspot_config['ssid']
+                    
+                    # 비밀번호 설정
+                    if 'password' in hotspot_config:
+                        self.hotspot_config['password'] = hotspot_config['password']
+                    
+                    # 채널 설정
+                    if 'channel' in hotspot_config:
+                        self.hotspot_config['channel'] = hotspot_config['channel']
+                    
+                    # 인터페이스 설정
+                    if 'interface' in hotspot_config:
+                        self.hotspot_config['interface'] = hotspot_config['interface']
+                    
+                    self.logger.info(f"핫스팟 설정 로드됨: SSID={self.hotspot_config['ssid']}")
+                    
+        except Exception as e:
+            self.logger.warning(f"핫스팟 설정 로드 실패, 기본값 사용: {e}")
+    
     def check_wifi_connection(self) -> bool:
         """WiFi 연결 상태 확인"""
         try:

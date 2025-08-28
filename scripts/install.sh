@@ -92,7 +92,11 @@ install_dependencies() {
         rsyslog \
         systemd-journal-remote \
         i2c-tools \
-        python3-rpi.gpio
+        python3-rpi.gpio \
+        hostapd \
+        dnsmasq \
+        iw \
+        wpasupplicant
     
     log_info "의존성 패키지 설치 완료"
 }
@@ -302,6 +306,78 @@ EOF
     log_info "USB 장치 권한 설정 완료"
 }
 
+# 핫스팟 설정
+setup_hotspot() {
+    log_step "핫스팟 설정 중..."
+    
+    # hostapd 설정 파일 생성
+    cat > /etc/hostapd/hostapd.conf << 'EOF'
+interface=wlan0
+driver=nl80211
+ssid=Factor-Client-Setup
+hw_mode=g
+channel=6
+wmm_enabled=0
+macaddr_acl=0
+auth_algs=1
+ignore_broadcast_ssid=0
+wpa=2
+wpa_passphrase=factor123
+wpa_key_mgmt=WPA-PSK
+wpa_pairwise=TKIP
+rsn_pairwise=CCMP
+country_code=US
+EOF
+
+    # dnsmasq 설정 파일 생성
+    cat > /etc/dnsmasq.conf << 'EOF'
+interface=wlan0
+dhcp-range=192.168.4.2,192.168.4.20,255.255.255.0,24h
+dhcp-option=3,192.168.4.1
+dhcp-option=6,192.168.4.1
+EOF
+
+    # dhcpcd 설정 수정 (wlan0 인터페이스 설정)
+    if ! grep -q "interface wlan0" /etc/dhcpcd.conf; then
+        cat >> /etc/dhcpcd.conf << 'EOF'
+
+# Factor Client 핫스팟 설정
+interface wlan0
+    static ip_address=192.168.4.1/24
+    nohook wpa_supplicant
+EOF
+    fi
+
+    # hostapd 서비스 설정
+    sed -i 's/#DAEMON_CONF=""/DAEMON_CONF="\/etc\/hostapd\/hostapd.conf"/' /etc/default/hostapd
+    
+    # 서비스 활성화
+    systemctl unmask hostapd
+    systemctl enable hostapd
+    systemctl enable dnsmasq
+    
+    # IP 포워딩 활성화
+    echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
+    sysctl -p
+    
+    # iptables 규칙 설정
+    iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+    iptables -A FORWARD -i wlan0 -o eth0 -j ACCEPT
+    iptables -A FORWARD -i eth0 -o wlan0 -m state --state RELATED,ESTABLISHED -j ACCEPT
+    
+    # iptables 규칙 저장
+    if command -v iptables-save &> /dev/null; then
+        iptables-save > /etc/iptables.rules
+        cat > /etc/network/if-pre-up.d/iptables << 'EOF'
+#!/bin/sh
+iptables-restore < /etc/iptables.rules
+EOF
+        chmod +x /etc/network/if-pre-up.d/iptables
+    fi
+    
+    log_info "핫스팟 설정 완료"
+}
+
 # 방화벽 설정
 setup_firewall() {
     log_step "방화벽 설정 중..."
@@ -324,6 +400,17 @@ installation_complete() {
     log_info "웹 인터페이스: http://$(hostname -I | awk '{print $1}'):8080"
     log_info "설정 파일: /etc/factor-client/settings.yaml"
     log_info "로그 파일: /var/log/factor-client/"
+    echo
+    log_info "핫스팟 정보:"
+    echo "  SSID: Factor-Client-Setup"
+    echo "  비밀번호: factor123"
+    echo "  게이트웨이: 192.168.4.1"
+    echo "  설정 페이지: http://192.168.4.1:8080/setup"
+    echo
+    log_info "핫스팟 서비스 관리:"
+    echo "  sudo systemctl status hostapd     # 핫스팟 상태 확인"
+    echo "  sudo systemctl restart hostapd    # 핫스팟 재시작"
+    echo "  sudo systemctl status dnsmasq    # DHCP 서버 상태 확인"
     echo
     log_info "서비스 관리 명령어:"
     echo "  systemctl status factor-client    # 상태 확인"
@@ -352,6 +439,7 @@ main() {
     optimize_system
     setup_readonly_root
     setup_usb_permissions
+    setup_hotspot
     setup_service
     setup_firewall
     installation_complete

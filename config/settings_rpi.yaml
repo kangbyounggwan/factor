@@ -29,8 +29,8 @@ printer:
 # 핫스팟 설정 (라즈베리파이에서 활성화)
 hotspot:
   enabled: true
-  ssid: "Factor-Client-RPi"
-  password: "factor1234"
+  ssid: "Factor-Client-Setup"
+  password: "factor123"
   channel: 6
   country_code: "US"
   interface: "wlan0"
