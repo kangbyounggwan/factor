@@ -11,7 +11,7 @@ from pathlib import Path
 import os
 
 from core import ConfigManager
-from core.hotspot_manager import HotspotManager
+from core.bluetooth_manager import BluetoothManager
 from .api import api_bp
 from .socketio_handler import socketio
  
@@ -41,8 +41,8 @@ def create_app(config_manager: ConfigManager, factor_client=None):
     app.factor_client = factor_client
     app.config_manager = config_manager
     
-    # 진행률/핫스팟 관리자 초기화
-    app.hotspot_manager = HotspotManager(config_manager)
+    # 블루투스 관리자 초기화
+    app.bluetooth_manager = BluetoothManager(config_manager)
     
     
     # 정적 파일 경로 설정

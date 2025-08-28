@@ -310,12 +310,29 @@ EOF
 setup_bluetooth() {
     log_step "블루투스 설정 중..."
     
-    # 블루투스 서비스 활성화
+    # 블루투스 서비스 활성화 및 시작
+    log_step "블루투스 서비스 활성화 중..."
     systemctl enable bluetooth.service
     systemctl start bluetooth.service
     
+    # 블루투스 서비스 상태 확인
+    if systemctl is-active --quiet bluetooth.service; then
+        log_success "블루투스 서비스가 성공적으로 시작되었습니다."
+    else
+        log_error "블루투스 서비스 시작에 실패했습니다."
+        return 1
+    fi
+    
     # 블루투스 인터페이스 활성화
+    log_step "블루투스 인터페이스 활성화 중..."
     hciconfig hci0 up 2>/dev/null || true
+    
+    # 블루투스 인터페이스 상태 확인
+    if hciconfig hci0 >/dev/null 2>&1; then
+        log_success "블루투스 인터페이스가 활성화되었습니다."
+    else
+        log_warning "블루투스 인터페이스 활성화에 실패했습니다. (재부팅 후 자동 활성화)"
+    fi
     
     # 블루투스 설정 파일 생성
     cat > /etc/bluetooth/main.conf << 'EOF'
@@ -391,6 +408,11 @@ installation_complete() {
     echo "  sudo systemctl restart bluetooth    # 블루투스 재시작"
     echo "  sudo bluetoothctl                   # 블루투스 관리 도구"
     echo
+    log_info "블루투스 상태 확인:"
+    echo "  sudo hciconfig                      # 블루투스 인터페이스 상태"
+    echo "  sudo hcitool scan                   # 주변 블루투스 장비 스캔"
+    echo "  sudo systemctl is-active bluetooth  # 블루투스 서비스 실행 상태"
+    echo
     log_info "서비스 관리 명령어:"
     echo "  systemctl status factor-client    # 상태 확인"
     echo "  systemctl restart factor-client   # 재시작"
@@ -421,6 +443,26 @@ main() {
     setup_bluetooth
     setup_service
     setup_firewall
+    
+    # 블루투스 상태 최종 확인
+    log_step "블루투스 상태 최종 확인 중..."
+    if systemctl is-active --quiet bluetooth.service; then
+        log_success "블루투스 서비스가 정상적으로 실행 중입니다."
+        
+        # 블루투스 인터페이스 상태 확인
+        if hciconfig hci0 >/dev/null 2>&1; then
+            log_success "블루투스 인터페이스가 활성화되었습니다."
+        else
+            log_warning "블루투스 인터페이스가 비활성화되어 있습니다. 재부팅 후 자동 활성화됩니다."
+        fi
+    else
+        log_error "블루투스 서비스가 실행되지 않고 있습니다."
+        log_info "다음 명령어로 수동으로 시작할 수 있습니다:"
+        echo "  sudo systemctl start bluetooth"
+        echo "  sudo systemctl enable bluetooth"
+    fi
+    
+    echo
     installation_complete
 }
 

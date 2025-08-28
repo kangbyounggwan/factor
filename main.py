@@ -20,7 +20,7 @@ project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
 from core import ConfigManager, FactorClient, setup_logger
-from core.hotspot_manager import HotspotManager
+from core.bluetooth_manager import BluetoothManager
 from web import create_app, socketio
 
 
@@ -45,7 +45,7 @@ class FactorClientFirmware:
         # Factor 클라이언트 초기화
         self.factor_client = None
         self.web_app = None
-        self.hotspot_manager = None
+        self.bluetooth_manager = None
         self.running = False
         
         # 시그널 핸들러 등록
@@ -70,18 +70,18 @@ class FactorClientFirmware:
                 self.logger.error("설정이 유효하지 않습니다. 종료합니다.")
                 return False
             
-            # 핫스팟 관리자 초기화 (Linux에서만)
+            # 블루투스 관리자 초기화 (Linux에서만)
             import platform
             if platform.system() == "Linux":
-                self.hotspot_manager = HotspotManager(self.config_manager)
-                # 초기 WiFi 연결 확인 및 핫스팟 관리
+                self.bluetooth_manager = BluetoothManager(self.config_manager)
+                # 블루투스 서비스 시작 및 장비 스캔
                 try:
-                    self.hotspot_manager.auto_manage_hotspot()
+                    self.bluetooth_manager.start_discovery_service()
                 except Exception as e:
-                    self.logger.warning(f"핫스팟 초기화 실패 (계속 진행): {e}")
+                    self.logger.warning(f"블루투스 초기화 실패 (계속 진행): {e}")
             else:
-                self.logger.info(f"{platform.system()} 환경에서는 핫스팟 기능을 건너뜁니다.")
-                self.hotspot_manager = None
+                self.logger.info(f"{platform.system()} 환경에서는 블루투스 기능을 건너뜁니다.")
+                self.bluetooth_manager = None
             
             # Factor 클라이언트 시작 (연결 실패해도 계속 실행)
             self.factor_client = FactorClient(self.config_manager)
@@ -109,8 +109,8 @@ class FactorClientFirmware:
             # Flask 앱 생성
             self.web_app = create_app(self.config_manager, self.factor_client)
             
-            # 핫스팟 관리자를 앱에 연결
-            self.web_app.hotspot_manager = self.hotspot_manager
+            # 블루투스 관리자를 앱에 연결
+            self.web_app.bluetooth_manager = self.bluetooth_manager
             
             # 웹 서버 설정
             host = server_config.get('host', '0.0.0.0')
@@ -188,9 +188,10 @@ class FactorClientFirmware:
                 if memory_percent > 85:
                     self.logger.warning(f"메모리 사용량 높음: {memory_percent}%")
                 
-                # 핫스팟 자동 관리
-                if self.hotspot_manager:
-                    self.hotspot_manager.auto_manage_hotspot()
+                # 블루투스 상태 체크
+                if self.bluetooth_manager:
+                    # 블루투스 상태 로깅 (선택사항)
+                    pass
                 
             except Exception as e:
                 self.logger.error(f"주기적 작업 오류: {e}")
@@ -208,9 +209,9 @@ class FactorClientFirmware:
             if self.factor_client:
                 self.factor_client.stop()
             
-            # 핫스팟 관리자 정리
-            if self.hotspot_manager:
-                self.hotspot_manager.disable_hotspot()
+            # 블루투스 관리자 정리
+            if self.bluetooth_manager:
+                self.bluetooth_manager.stop_bluetooth()
             
             # 설정 관리자 정리
             if self.config_manager:

@@ -201,7 +201,7 @@ factor-client-firmware/
 ## 📚 문서
 
 - [설치 가이드](docs/installation_guide.md)
-- [핫스팟 설정](docs/hotspot_setup_guide.md)
+- [블루투스 설정](docs/bluetooth_setup_guide.md)
 - [SD카드 빌드](docs/sd_card_build_guide.md)
 
 ## 🤝 기여
