@@ -386,6 +386,42 @@ EOF
 setup_bluetooth_autoconfig_service() {
     log_step "블루투스 자동 설정 서비스 설치 중..."
 
+    # 실행 스크립트 생성 (bluetoothctl advertise 메뉴 시퀀스 포함)
+    cat > /usr/local/sbin/factor-bt-setup.sh << 'EOS'
+#!/bin/bash
+set -e
+
+rfkill unblock bluetooth || true
+hciconfig hci0 up || true
+
+# BLE/BREDR 및 광고/연결 가능 설정
+btmgmt -i hci0 le on || true
+btmgmt -i hci0 bredr on || true
+btmgmt -i hci0 connectable on || true
+btmgmt -i hci0 advertising on || true
+
+# bluetoothctl로 discoverable, pairable 및 광고 데이터 구성
+bluetoothctl << 'BTEOF'
+power on
+agent on
+default-agent
+set-alias Factor-Client
+pairable on
+discoverable on
+discoverable-timeout 0
+menu advertise
+name on
+appearance on
+tx-power on
+# 필요 시 사용자 서비스 UUID를 광고에 추가하려면 아래 라인 예시를 해제하세요
+# uuids 12345678-1234-1234-1234-1234567890ab
+back
+advertise on
+BTEOF
+EOS
+
+    chmod +x /usr/local/sbin/factor-bt-setup.sh
+
     cat > /etc/systemd/system/factor-bt-setup.service << 'EOF'
 [Unit]
 Description=Factor Bluetooth post-start setup
@@ -394,20 +430,7 @@ Requires=bluetooth.service
 
 [Service]
 Type=oneshot
-ExecStart=/bin/bash -lc '\
-  rfkill unblock bluetooth || true; \
-  hciconfig hci0 up || true; \
-  btmgmt -i hci0 le on || true; \
-  btmgmt -i hci0 bredr on || true; \
-  btmgmt -i hci0 connectable on || true; \
-  btmgmt -i hci0 advertising on || true; \
-  bluetoothctl --timeout 5 power on || true; \
-  bluetoothctl --timeout 5 agent NoInputNoOutput || true; \
-  bluetoothctl --timeout 5 default-agent || true; \
-  bluetoothctl --timeout 5 set-alias Factor-Client || true; \
-  bluetoothctl --timeout 5 pairable on || true; \
-  bluetoothctl --timeout 5 discoverable on || true; \
-  bluetoothctl --timeout 5 discoverable-timeout 0 || true'
+ExecStart=/usr/local/sbin/factor-bt-setup.sh
 
 [Install]
 WantedBy=multi-user.target
