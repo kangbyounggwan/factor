@@ -139,24 +139,21 @@ class GattService(ServiceInterface):
 
 
 class GattCharacteristic(ServiceInterface):
-    def __init__(self, uuid: str, flags: List[str], path: str, props_changed_cb):
+    def __init__(self, uuid: str, flags: List[str], path: str):
         super().__init__('org.bluez.GattCharacteristic1')
         self.uuid = uuid
         self.flags = flags
         self.path = path
         self._value: bytes = b''
         self._notifying = False
-        self._props_changed = props_changed_cb
 
     def _notify_value(self, value: bytes):
         self._value = value
-        if self._notifying and self._props_changed:
-            self._props_changed(
-                self.path,
-                'org.bluez.GattCharacteristic1',
-                {'Value': Variant('ay', list(value))},
-                []
-            )
+        if self._notifying:
+            try:
+                self.emit_properties_changed({'Value': Variant('ay', list(value))}, [])
+            except Exception:
+                pass
 
     @dbus_property(access=PropertyAccess.READ)
     def UUID(self) -> 's':
@@ -231,8 +228,8 @@ class ObjectManager(ServiceInterface):
         return managed
 
 class WifiRegisterChar(GattCharacteristic):
-    def __init__(self, props_changed_cb):
-        super().__init__(WIFI_REGISTER_CHAR_UUID, ['write', 'notify'], WIFI_CHAR_PATH, props_changed_cb)
+    def __init__(self):
+        super().__init__(WIFI_REGISTER_CHAR_UUID, ['write', 'notify'], WIFI_CHAR_PATH)
 
     @method()
     def WriteValue(self, value: 'ay', options: 'a{sv}'):
@@ -259,8 +256,8 @@ class WifiRegisterChar(GattCharacteristic):
 
 
 class EquipmentSettingsChar(GattCharacteristic):
-    def __init__(self, props_changed_cb):
-        super().__init__(EQUIPMENT_SETTINGS_CHAR_UUID, ['write', 'notify'], EQUIP_CHAR_PATH, props_changed_cb)
+    def __init__(self):
+        super().__init__(EQUIPMENT_SETTINGS_CHAR_UUID, ['write', 'notify'], EQUIP_CHAR_PATH)
         self._settings: Dict[str, Any] = {}
 
     @method()
@@ -336,8 +333,8 @@ async def _async_run(logger: logging.Logger):
     obj_manager = ObjectManager(SERVICE_UUID)
     bus.export(APP_PATH, obj_manager)
     svc = GattService(SERVICE_UUID)
-    wifi_char = WifiRegisterChar(props_iface.PropertiesChanged)
-    equip_char = EquipmentSettingsChar(props_iface.PropertiesChanged)
+    wifi_char = WifiRegisterChar()
+    equip_char = EquipmentSettingsChar()
 
     bus.export(SERVICE_PATH, svc)
     bus.export(WIFI_CHAR_PATH, wifi_char)
