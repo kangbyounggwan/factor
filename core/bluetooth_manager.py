@@ -117,6 +117,22 @@ class BluetoothManager:
             
             # 블루투스 장비를 페어링 가능하게 설정
             subprocess.run(['sudo', 'bluetoothctl', 'pairable', 'on'], check=True)
+
+            # BLE 전원/광고 설정 (BLE 스캐너에서 검색 가능하도록)
+            try:
+                subprocess.run(['sudo', 'bluetoothctl', 'power', 'on'], check=True)
+            except Exception:
+                pass
+            # 광고 재설정: off 후 on (상태 불명확 시 안전)
+            try:
+                subprocess.run(['sudo', 'bluetoothctl', 'advertise', 'off'], check=False)
+            except Exception:
+                pass
+            try:
+                subprocess.run(['sudo', 'bluetoothctl', 'advertise', 'on'], check=True)
+                self.logger.info("BLE 광고(advertise on) 활성화")
+            except Exception as e:
+                self.logger.warning(f"BLE 광고 활성화 실패: {e}")
             
             self.logger.info("블루투스 인터페이스가 활성화되었습니다")
             
