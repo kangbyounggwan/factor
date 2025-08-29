@@ -336,13 +336,33 @@ async def _async_run(logger: logging.Logger):
     wifi_char = WifiRegisterChar()
     equip_char = EquipmentSettingsChar()
 
+    # 구성 로그: 서비스/특성/플래그
+    try:
+        logger.info(
+            "BLE GATT 구성 - service=%s, chars=[{%s:%s}, {%s:%s}]",
+            SERVICE_UUID,
+            WIFI_REGISTER_CHAR_UUID,
+            ','.join(['write', 'notify']),
+            EQUIPMENT_SETTINGS_CHAR_UUID,
+            ','.join(['write', 'notify'])
+        )
+    except Exception:
+        pass
+
     bus.export(SERVICE_PATH, svc)
     bus.export(WIFI_CHAR_PATH, wifi_char)
     bus.export(EQUIP_CHAR_PATH, equip_char)
 
     # GATT 등록
     await gatt_mgr.call_register_application(APP_PATH, {})
-    logger.info("BLE GATT Application 등록 완료")
+    try:
+        logger.info(
+            "BLE GATT Application 등록 완료 (app=%s, service=%s)",
+            APP_PATH,
+            SERVICE_PATH
+        )
+    except Exception:
+        logger.info("BLE GATT Application 등록 완료")
 
     # 광고 등록(실패 무시)
     if adv_mgr:
@@ -350,7 +370,14 @@ async def _async_run(logger: logging.Logger):
             adv = LEAdvertisement(SERVICE_UUID)
             bus.export(ADV_PATH, adv)
             await adv_mgr.call_register_advertisement(ADV_PATH, {})
-            logger.info("BLE 광고 등록 완료 (LEAdvertisingManager1)")
+            try:
+                logger.info(
+                    "BLE 광고 등록 완료 (LEAdvertisingManager1, adv=%s, service_uuid=%s)",
+                    ADV_PATH,
+                    SERVICE_UUID
+                )
+            except Exception:
+                logger.info("BLE 광고 등록 완료 (LEAdvertisingManager1)")
         except Exception as e:
             logger.warning(f"BLE 광고 등록 실패(무시): {e}")
 
