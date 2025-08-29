@@ -424,7 +424,7 @@ btmgmt -i hci0 advertising on || true
 # bluetoothctl로 discoverable, pairable 및 광고 데이터 구성
 bluetoothctl << 'BTEOF'
 power on
-agent on
+agent NoInputNoOutput
 default-agent
 set-alias Factor-Client
 pairable on
