@@ -14,10 +14,24 @@ import time
 import os
 import tempfile
 import io
+import uuid
 
 api_bp = Blueprint('api', __name__)
 logger = logging.getLogger('api')
 
+
+def _get_trace_id_from_request() -> str:
+    """요청 헤더/바디에서 trace_id를 추출하거나 새로 발급"""
+    try:
+        tid = (request.headers.get('X-Trace-Id') or '').strip()
+        if not tid:
+            data = request.get_json(silent=True) or {}
+            tid = (str(data.get('trace_id') or '')).strip()
+        if not tid:
+            tid = uuid.uuid4().hex
+        return tid
+    except Exception:
+        return uuid.uuid4().hex
 
 @api_bp.route('/status')
 def get_status():
@@ -1177,22 +1191,33 @@ def pair_bluetooth_device():
     """블루투스 장비 페어링"""
     try:
         data = request.get_json()
+        trace_id = _get_trace_id_from_request()
         if not data or 'mac_address' not in data:
-            return jsonify({'error': 'MAC address is required'}), 400
+            return jsonify({'error': 'MAC address is required', 'trace_id': trace_id}), 400
         
         bluetooth_manager = getattr(current_app, 'bluetooth_manager', None)
         if not bluetooth_manager:
-            return jsonify({'error': 'Bluetooth manager not available'}), 503
+            return jsonify({'error': 'Bluetooth manager not available', 'trace_id': trace_id}), 503
         
-        success = bluetooth_manager.pair_device(data['mac_address'])
+        # B_ 래퍼 사용 및 trace_id 로깅
+        success = False
+        try:
+            if hasattr(bluetooth_manager, 'B_pair_device'):
+                success = bluetooth_manager.B_pair_device(data['mac_address'], trace_id=trace_id)
+            else:
+                success = bluetooth_manager.pair_device(data['mac_address'])
+        except Exception as e:
+            logger.error(f"[trace={trace_id}] 블루투스 페어링 내부 오류: {e}")
+            success = False
         if success:
-            return jsonify({'success': True, 'message': 'Device paired successfully'})
+            return jsonify({'success': True, 'message': 'Device paired successfully', 'trace_id': trace_id})
         else:
-            return jsonify({'success': False, 'error': 'Failed to pair device'}), 500
+            return jsonify({'success': False, 'error': 'Failed to pair device', 'trace_id': trace_id}), 500
             
     except Exception as e:
-        logger.error(f"블루투스 페어링 오류: {e}")
-        return jsonify({'error': str(e)}), 500
+        trace_id = _get_trace_id_from_request()
+        logger.error(f"[trace={trace_id}] 블루투스 페어링 오류: {e}")
+        return jsonify({'error': str(e), 'trace_id': trace_id}), 500
 
 
 @api_bp.route('/bluetooth/connect', methods=['POST'])
@@ -1200,22 +1225,33 @@ def connect_bluetooth_device():
     """블루투스 장비 연결"""
     try:
         data = request.get_json()
+        trace_id = _get_trace_id_from_request()
         if not data or 'mac_address' not in data:
-            return jsonify({'error': 'MAC address is required'}), 400
+            return jsonify({'error': 'MAC address is required', 'trace_id': trace_id}), 400
         
         bluetooth_manager = getattr(current_app, 'bluetooth_manager', None)
         if not bluetooth_manager:
-            return jsonify({'error': 'Bluetooth manager not available'}), 503
+            return jsonify({'error': 'Bluetooth manager not available', 'trace_id': trace_id}), 503
         
-        success = bluetooth_manager.connect_device(data['mac_address'])
+        # B_ 래퍼 사용 및 trace_id 로깅
+        success = False
+        try:
+            if hasattr(bluetooth_manager, 'B_connect_device'):
+                success = bluetooth_manager.B_connect_device(data['mac_address'], trace_id=trace_id)
+            else:
+                success = bluetooth_manager.connect_device(data['mac_address'])
+        except Exception as e:
+            logger.error(f"[trace={trace_id}] 블루투스 연결 내부 오류: {e}")
+            success = False
         if success:
-            return jsonify({'success': True, 'message': 'Device connected successfully'})
+            return jsonify({'success': True, 'message': 'Device connected successfully', 'trace_id': trace_id})
         else:
-            return jsonify({'success': False, 'error': 'Failed to connect device'}), 500
+            return jsonify({'success': False, 'error': 'Failed to connect device', 'trace_id': trace_id}), 500
             
     except Exception as e:
-        logger.error(f"블루투스 연결 오류: {e}")
-        return jsonify({'error': str(e)}), 500
+        trace_id = _get_trace_id_from_request()
+        logger.error(f"[trace={trace_id}] 블루투스 연결 오류: {e}")
+        return jsonify({'error': str(e), 'trace_id': trace_id}), 500
 
 
 @api_bp.route('/bluetooth/disconnect', methods=['POST'])
@@ -1223,22 +1259,33 @@ def disconnect_bluetooth_device():
     """블루투스 장비 연결 해제"""
     try:
         data = request.get_json()
+        trace_id = _get_trace_id_from_request()
         if not data or 'mac_address' not in data:
-            return jsonify({'error': 'MAC address is required'}), 400
+            return jsonify({'error': 'MAC address is required', 'trace_id': trace_id}), 400
         
         bluetooth_manager = getattr(current_app, 'bluetooth_manager', None)
         if not bluetooth_manager:
-            return jsonify({'error': 'Bluetooth manager not available'}), 503
+            return jsonify({'error': 'Bluetooth manager not available', 'trace_id': trace_id}), 503
         
-        success = bluetooth_manager.disconnect_device(data['mac_address'])
+        # B_ 래퍼 사용 및 trace_id 로깅
+        success = False
+        try:
+            if hasattr(bluetooth_manager, 'B_disconnect_device'):
+                success = bluetooth_manager.B_disconnect_device(data['mac_address'], trace_id=trace_id)
+            else:
+                success = bluetooth_manager.disconnect_device(data['mac_address'])
+        except Exception as e:
+            logger.error(f"[trace={trace_id}] 블루투스 연결 해제 내부 오류: {e}")
+            success = False
         if success:
-            return jsonify({'success': True, 'message': 'Device disconnected successfully'})
+            return jsonify({'success': True, 'message': 'Device disconnected successfully', 'trace_id': trace_id})
         else:
-            return jsonify({'success': False, 'error': 'Failed to disconnect device'}), 500
+            return jsonify({'success': False, 'error': 'Failed to disconnect device', 'trace_id': trace_id}), 500
             
     except Exception as e:
-        logger.error(f"블루투스 연결 해제 오류: {e}")
-        return jsonify({'error': str(e)}), 500
+        trace_id = _get_trace_id_from_request()
+        logger.error(f"[trace={trace_id}] 블루투스 연결 해제 오류: {e}")
+        return jsonify({'error': str(e), 'trace_id': trace_id}), 500
 
 
 # WiFi 관련 API
@@ -1246,17 +1293,21 @@ def disconnect_bluetooth_device():
 def scan_wifi():
     """WiFi 네트워크 스캔"""
     try:
+        trace_id = _get_trace_id_from_request()
+        logger.info(f"[trace={trace_id}] WiFi 스캔 요청")
         networks = _scan_wifi_networks()
         return jsonify({
             'success': True,
             'networks': networks
-        })
+        , 'trace_id': trace_id})
         
     except Exception as e:
-        logger.error(f"WiFi 스캔 오류: {e}")
+        trace_id = _get_trace_id_from_request()
+        logger.error(f"[trace={trace_id}] WiFi 스캔 오류: {e}")
         return jsonify({
             'success': False,
-            'error': str(e)
+            'error': str(e),
+            'trace_id': trace_id
         }), 500
 
 
@@ -1265,8 +1316,9 @@ def connect_wifi():
     """WiFi 연결 (블루투스를 통한 설정)"""
     try:
         data = request.get_json()
+        trace_id = _get_trace_id_from_request()
         if not data or 'ssid' not in data:
-            return jsonify({'error': 'SSID is required'}), 400
+            return jsonify({'error': 'SSID is required', 'trace_id': trace_id}), 400
         
         # WiFi 설정을 블루투스를 통해 전송하는 로직으로 변경
         # 현재는 기본적인 WiFi 연결만 지원
@@ -1280,19 +1332,23 @@ def connect_wifi():
             message = f'WiFi configuration failed: {str(e)}'
         
         if success:
-            return jsonify({'success': True, 'message': message})
+            logger.info(f"[trace={trace_id}] WiFi 연결 완료: ssid={data.get('ssid')}")
+            return jsonify({'success': True, 'message': message, 'trace_id': trace_id})
         else:
-            return jsonify({'success': False, 'error': message}), 500
+            logger.error(f"[trace={trace_id}] WiFi 연결 실패: {message}")
+            return jsonify({'success': False, 'error': message, 'trace_id': trace_id}), 500
             
     except Exception as e:
-        logger.error(f"WiFi 연결 오류: {e}")
-        return jsonify({'error': str(e)}), 500
+        trace_id = _get_trace_id_from_request()
+        logger.error(f"[trace={trace_id}] WiFi 연결 오류: {e}")
+        return jsonify({'error': str(e), 'trace_id': trace_id}), 500
 
 
 @api_bp.route('/wifi/status', methods=['GET'])
 def wifi_status():
     """WiFi 연결 상태 확인"""
     try:
+        trace_id = _get_trace_id_from_request()
         # WiFi 연결 상태 직접 확인
         connected = False
         current_ssid = None
@@ -1309,12 +1365,14 @@ def wifi_status():
         return jsonify({
             'connected': connected,
             'ssid': current_ssid,
-            'bluetooth_available': True
+            'bluetooth_available': True,
+            'trace_id': trace_id
         })
         
     except Exception as e:
-        logger.error(f"WiFi 상태 확인 오류: {e}")
-        return jsonify({'error': str(e)}), 500
+        trace_id = _get_trace_id_from_request()
+        logger.error(f"[trace={trace_id}] WiFi 상태 확인 오류: {e}")
+        return jsonify({'error': str(e), 'trace_id': trace_id}), 500
 
 
 # 설정 완료 API
@@ -1323,8 +1381,9 @@ def complete_setup():
     """초기 설정 완료"""
     try:
         data = request.get_json()
+        trace_id = _get_trace_id_from_request()
         if not data:
-            return jsonify({'error': 'No data provided'}), 400
+            return jsonify({'error': 'No data provided', 'trace_id': trace_id}), 400
         
         config_manager = current_app.config_manager
         hotspot_manager = getattr(current_app, 'hotspot_manager', None)
@@ -1358,13 +1417,14 @@ def complete_setup():
         config_manager.save_config()
         
         # 4. 블루투스 연결 유지 (WiFi 연결 후에도)
-        logger.info("설정 완료 - 블루투스 연결 유지")
+        logger.info(f"[trace={trace_id}] 설정 완료 - 블루투스 연결 유지")
         
-        return jsonify({'success': True, 'message': 'Setup completed successfully'})
+        return jsonify({'success': True, 'message': 'Setup completed successfully', 'trace_id': trace_id})
         
     except Exception as e:
-        logger.error(f"설정 완료 오류: {e}")
-        return jsonify({'error': str(e)}), 500
+        trace_id = _get_trace_id_from_request()
+        logger.error(f"[trace={trace_id}] 설정 완료 오류: {e}")
+        return jsonify({'error': str(e), 'trace_id': trace_id}), 500
 
 
 def _scan_wifi_networks() -> List[Dict[str, Any]]:
