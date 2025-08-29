@@ -7,7 +7,7 @@ import os
 import subprocess
 import logging
 import time
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 
 class BluetoothManager:
