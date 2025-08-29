@@ -121,8 +121,8 @@ create_user() {
         log_info "factor 사용자가 이미 존재합니다"
     fi
     
-    # 필요한 그룹에 추가
-    usermod -a -G i2c,spi,gpio,dialout factor 2>/dev/null || true
+    # 필요한 그룹에 추가 (bluetooth 포함)
+    usermod -a -G i2c,spi,gpio,dialout,bluetooth factor 2>/dev/null || true
 }
 
 # 디렉토리 생성
@@ -366,7 +366,7 @@ Key=00000000000000000000000000000000
 Key=00000000000000000000000000000000
 EOF
 
-    # 블루투스 권한 설정
+    # 블루투스 권한 설정 (중복 허용)
     usermod -a -G bluetooth factor 2>/dev/null || true
     
     # 블루투스 보안 정책 설정
@@ -380,6 +380,27 @@ EOF
     systemctl restart bluetooth.service
     
     log_info "블루투스 설정 완료"
+}
+# 블루투스 권한(Polkit) 완화 설정
+setup_bluetooth_permissions() {
+    log_step "블루투스 접근 권한(Polkit) 설정 중..."
+
+    # org.bluez 정책: bluetooth 그룹 사용자에게 허용
+    mkdir -p /etc/polkit-1/rules.d
+    cat > /etc/polkit-1/rules.d/90-factor-bluetooth.rules << 'EOF'
+polkit.addRule(function(action, subject) {
+  if (action && action.id && action.id.indexOf('org.bluez') === 0 && subject && subject.isInGroup('bluetooth')) {
+    return polkit.Result.YES;
+  }
+});
+EOF
+
+    # polkit 데몬이 rule을 자동 감지하므로 재시작은 선택
+    if systemctl is-active --quiet polkit 2>/dev/null; then
+        systemctl reload polkit 2>/dev/null || true
+    fi
+
+    log_info "Polkit 규칙 적용 완료: bluetooth 그룹에 org.bluez 액션 허용"
 }
 
 # 블루투스 자동 설정 oneshot 서비스 설치
@@ -470,8 +491,8 @@ installation_complete() {
     log_info "블루투스 정보:"
     echo "  서비스: bluetooth.service"
     echo "  장비 이름: Factor-Client"
-    echo "  관리 도구: sudo bluetoothctl"
-    echo "  스캔 명령: sudo hcitool scan"
+    echo "  관리 도구: bluetoothctl"
+    echo "  스캔 명령: bluetoothctl --timeout 5 scan on"
     echo
     log_info "블루투스 서비스 관리:"
     echo "  sudo systemctl status bluetooth     # 블루투스 상태 확인"
@@ -479,8 +500,8 @@ installation_complete() {
     echo "  sudo bluetoothctl                   # 블루투스 관리 도구"
     echo
     log_info "블루투스 상태 확인:"
-    echo "  sudo hciconfig                      # 블루투스 인터페이스 상태"
-    echo "  sudo hcitool scan                   # 주변 블루투스 장비 스캔"
+    echo "  hciconfig                           # 블루투스 인터페이스 상태"
+    echo "  bluetoothctl devices                # 주변 블루투스 장비 목록"
     echo "  sudo systemctl is-active bluetooth  # 블루투스 서비스 실행 상태"
     echo
     log_info "서비스 관리 명령어:"

@@ -9,6 +9,7 @@ import logging
 import time
 import json
 import uuid
+import re
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 import threading
@@ -80,7 +81,15 @@ class BluetoothManager:
                 
             else:
                 self.logger.warning("블루투스 서비스가 비활성화되어 있습니다")
-                self._start_bluetooth_service()
+                # 루트일 때만 서비스 시작을 시도, 아닐 경우 가이드만 출력
+                try:
+                    if hasattr(os, 'geteuid') and os.geteuid() == 0:
+                        self._start_bluetooth_service()
+                    else:
+                        self.logger.warning(
+                            "루트 권한이 아니므로 서비스 시작을 건너뜁니다. "
+                            "관리자 권한에서 'sudo systemctl enable --now bluetooth'를 실행하세요."
+                        )
                 
         except Exception as e:
             self.logger.error(f"블루투스 초기화 실패: {e}")
@@ -88,8 +97,8 @@ class BluetoothManager:
     def _start_bluetooth_service(self):
         """블루투스 서비스 시작"""
         try:
-            subprocess.run(['sudo', 'systemctl', 'start', 'bluetooth'], check=True)
-            subprocess.run(['sudo', 'systemctl', 'enable', 'bluetooth'], check=True)
+            subprocess.run(['systemctl', 'start', 'bluetooth'], check=True)
+            subprocess.run(['systemctl', 'enable', 'bluetooth'], check=True)
             
             # 잠시 대기 후 인터페이스 활성화
             time.sleep(3)
@@ -99,37 +108,34 @@ class BluetoothManager:
             self.logger.info("블루투스 서비스가 시작되었습니다")
             
         except Exception as e:
-            self.logger.error(f"블루투스 서비스 시작 실패: {e}")
+            self.logger.error(f"블루투스 서비스 시작 실패(권한 필요): {e}")
     
     def _enable_bluetooth_interface(self):
         """블루투스 인터페이스 활성화"""
         try:
-            # hci0 인터페이스 활성화
-            subprocess.run(['sudo', 'hciconfig', 'hci0', 'up'], check=True)
-            
             # 블루투스 장비 이름 설정
             subprocess.run([
-                'sudo', 'bluetoothctl', 'set-alias', self.bluetooth_config['device_name']
+                'bluetoothctl', 'set-alias', self.bluetooth_config['device_name']
             ], check=True)
             
             # 블루투스 장비를 발견 가능하게 설정
-            subprocess.run(['sudo', 'bluetoothctl', 'discoverable', 'on'], check=True)
+            subprocess.run(['bluetoothctl', 'discoverable', 'on'], check=True)
             
             # 블루투스 장비를 페어링 가능하게 설정
-            subprocess.run(['sudo', 'bluetoothctl', 'pairable', 'on'], check=True)
+            subprocess.run(['bluetoothctl', 'pairable', 'on'], check=True)
 
             # BLE 전원/광고 설정 (BLE 스캐너에서 검색 가능하도록)
             try:
-                subprocess.run(['sudo', 'bluetoothctl', 'power', 'on'], check=True)
+                subprocess.run(['bluetoothctl', 'power', 'on'], check=True)
             except Exception:
                 pass
             # 광고 재설정: off 후 on (상태 불명확 시 안전)
             try:
-                subprocess.run(['sudo', 'bluetoothctl', 'advertise', 'off'], check=False)
+                subprocess.run(['bluetoothctl', 'advertise', 'off'], check=False)
             except Exception:
                 pass
             try:
-                subprocess.run(['sudo', 'bluetoothctl', 'advertise', 'on'], check=True)
+                subprocess.run(['bluetoothctl', 'advertise', 'on'], check=True)
                 self.logger.info("BLE 광고(advertise on) 활성화")
             except Exception as e:
                 self.logger.warning(f"BLE 광고 활성화 실패: {e}")
@@ -148,45 +154,41 @@ class BluetoothManager:
             
             self.logger.info("블루투스 장비 스캔 중...")
             
-            # 블루투스 스캔 실행
+            # bluetoothctl 기반 스캔 (비루트/폴킷 허용)
             result = subprocess.run(
-                ['sudo', 'hcitool', 'scan'], 
-                capture_output=True, 
-                text=True, 
-                timeout=30
+                ['bluetoothctl', '--timeout', '12', 'scan', 'on'],
+                capture_output=True,
+                text=True,
+                timeout=20
             )
-            
-            if result.returncode == 0:
-                devices = []
-                lines = result.stdout.strip().split('\n')
-                
-                for line in lines[1:]:  # 첫 번째 줄은 헤더
-                    if line.strip():
-                        parts = line.strip().split('\t')
-                        if len(parts) >= 2:
-                            mac_address = parts[0].strip()
-                            device_name = parts[1].strip()
-                            
-                            device_info = {
-                                'mac_address': mac_address,
-                                'name': device_name,
-                                'type': 'unknown',
-                                'rssi': 0
-                            }
-                            
-                            # Factor Client 장비인지 확인
-                            if 'factor' in device_name.lower() or 'client' in device_name.lower():
-                                device_info['type'] = 'factor_client'
-                            
-                            devices.append(device_info)
-                            self.discovered_devices[mac_address] = device_info
-                
-                self.logger.info(f"{len(devices)}개의 블루투스 장비를 발견했습니다")
-                return devices
-                
-            else:
+            devices: List[Dict[str, Any]] = []
+            if result.returncode != 0:
                 self.logger.error("블루투스 스캔 실패")
                 return []
+
+            # 출력 예시: 'Device AA:BB:CC:DD:EE:FF MyDevice'
+            for raw in (result.stdout or '').split('\n'):
+                line = (raw or '').strip()
+                if not line.startswith('Device '):
+                    continue
+                try:
+                    _, rest = line.split('Device ', 1)
+                    parts = rest.split(' ', 1)
+                    mac = parts[0].strip()
+                    name = parts[1].strip() if len(parts) > 1 else 'Unknown'
+                    info = {
+                        'mac_address': mac,
+                        'name': name,
+                        'type': 'factor_client' if ('factor' in name.lower() or 'client' in name.lower()) else 'unknown',
+                        'rssi': 0
+                    }
+                    devices.append(info)
+                    self.discovered_devices[mac] = info
+                except Exception:
+                    continue
+
+            self.logger.info(f"{len(devices)}개의 블루투스 장비를 발견했습니다")
+            return devices
                 
         except Exception as e:
             self.logger.error(f"블루투스 장비 스캔 실패: {e}")
@@ -202,7 +204,7 @@ class BluetoothManager:
             
             # 페어링 명령 실행
             result = subprocess.run([
-                'sudo', 'bluetoothctl', 'pair', mac_address
+                'bluetoothctl', 'pair', mac_address
             ], capture_output=True, text=True, timeout=30)
             
             if result.returncode == 0 and 'successful' in result.stdout.lower():
@@ -226,7 +228,7 @@ class BluetoothManager:
             
             # 연결 명령 실행
             result = subprocess.run([
-                'sudo', 'bluetoothctl', 'connect', mac_address
+                'bluetoothctl', 'connect', mac_address
             ], capture_output=True, text=True, timeout=30)
             
             if result.returncode == 0 and 'successful' in result.stdout.lower():
@@ -571,7 +573,7 @@ class BluetoothManager:
             
             # 연결 해제 명령 실행
             result = subprocess.run([
-                'sudo', 'bluetoothctl', 'disconnect', mac_address
+                'bluetoothctl', 'disconnect', mac_address
             ], capture_output=True, text=True, timeout=30)
             
             if result.returncode == 0:
@@ -632,7 +634,7 @@ class BluetoothManager:
                 self.disconnect_device(mac_address)
             
             # 블루투스 서비스 중지
-            subprocess.run(['sudo', 'systemctl', 'stop', 'bluetooth'], check=False)
+            subprocess.run(['systemctl', 'stop', 'bluetooth'], check=False)
             
             self.is_bluetooth_active = False
             self.logger.info("블루투스 서비스가 중지되었습니다")
