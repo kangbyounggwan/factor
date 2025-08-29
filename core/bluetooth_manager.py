@@ -107,29 +107,33 @@ class BluetoothManager:
     def _enable_bluetooth_interface(self):
         """블루투스 인터페이스 활성화"""
         try:
-            # 블루투스 장비 이름 설정
+            # 전원 우선 켜기 (일부 환경에서 set-alias 전에 필요)
+            subprocess.run(['bluetoothctl', '--timeout', '3', 'power', 'on'], check=False)
+
+            # 블루투스 장비 이름 설정(실패해도 계속 진행)
             subprocess.run([
-                'bluetoothctl', 'set-alias', self.bluetooth_config['device_name']
-            ], check=True)
+                'bluetoothctl', '--timeout', '3', 'set-alias', self.bluetooth_config['device_name']
+            ], check=False)
             
             # 블루투스 장비를 발견 가능하게 설정
-            subprocess.run(['bluetoothctl', 'discoverable', 'on'], check=True)
+            subprocess.run(['bluetoothctl', '--timeout', '3', 'discoverable', 'on'], check=False)
             
             # 블루투스 장비를 페어링 가능하게 설정
-            subprocess.run(['bluetoothctl', 'pairable', 'on'], check=True)
+            subprocess.run(['bluetoothctl', '--timeout', '3', 'pairable', 'on'], check=False)
 
             # BLE 전원/광고 설정 (BLE 스캐너에서 검색 가능하도록)
+            # 전원 재확인
             try:
-                subprocess.run(['bluetoothctl', 'power', 'on'], check=True)
+                subprocess.run(['bluetoothctl', '--timeout', '3', 'power', 'on'], check=False)
             except Exception:
                 pass
             # 광고 재설정: off 후 on (상태 불명확 시 안전)
             try:
-                subprocess.run(['bluetoothctl', 'advertise', 'off'], check=False)
+                subprocess.run(['bluetoothctl', '--timeout', '3', 'advertise', 'off'], check=False)
             except Exception:
                 pass
             try:
-                subprocess.run(['bluetoothctl', 'advertise', 'on'], check=True)
+                subprocess.run(['bluetoothctl', '--timeout', '3', 'advertise', 'on'], check=False)
                 self.logger.info("BLE 광고(advertise on) 활성화")
             except Exception as e:
                 self.logger.warning(f"BLE 광고 활성화 실패: {e}")

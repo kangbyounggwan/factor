@@ -151,7 +151,7 @@ class GattCharacteristic(ServiceInterface):
         self._value = value
         if self._notifying:
             try:
-                self.emit_properties_changed({'Value': Variant('ay', list(value))}, [])
+                self.emit_properties_changed({'Value': Variant('ay', value)}, [])
             except Exception:
                 pass
 
@@ -169,7 +169,7 @@ class GattCharacteristic(ServiceInterface):
 
     @dbus_property(access=PropertyAccess.READ)
     def Value(self) -> 'ay':
-        return list(self._value)
+        return self._value
 
     @method()
     def StartNotify(self):
