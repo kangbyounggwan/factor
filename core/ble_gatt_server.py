@@ -20,7 +20,7 @@ from typing import Any, Dict, List
 from dbus_next.aio import MessageBus
 from dbus_next.service import ServiceInterface, method, dbus_property
 from dbus_next.constants import PropertyAccess
-from dbus_next import Variant
+from dbus_next import Variant, BusType
 
 
 # ===== 고정 UUID =====
@@ -306,7 +306,11 @@ class LEAdvertisement(ServiceInterface):
 
 
 async def _async_run(logger: logging.Logger):
-    bus = await MessageBus(bus_type=MessageBus.TYPE_SYSTEM).connect()
+    bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+    try:
+        await bus.request_name('org.factor.gatt')
+    except Exception:
+        pass
 
     adapter_path = '/org/bluez/hci0'
     obj = await bus.introspect(BLUEZ, adapter_path)
@@ -388,7 +392,7 @@ def start_ble_gatt_server(logger: logging.Logger) -> None:
     # 베스트-에포트 종료 훅: 별도 버스로 정리 시도
     async def _cleanup():
         try:
-            bus = await MessageBus(bus_type=MessageBus.TYPE_SYSTEM).connect()
+            bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
             adapter_path = '/org/bluez/hci0'
             obj = await bus.introspect(BLUEZ, adapter_path)
             adapter = bus.get_proxy_object(BLUEZ, adapter_path, obj)
