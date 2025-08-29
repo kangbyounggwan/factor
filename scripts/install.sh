@@ -415,9 +415,9 @@ set -e
 rfkill unblock bluetooth || true
 hciconfig hci0 up || true
 
-# BLE/BREDR 및 광고/연결 가능 설정
+# BLE only: BR/EDR 끔, LE만 사용
 btmgmt -i hci0 le on || true
-btmgmt -i hci0 bredr on || true
+btmgmt -i hci0 bredr off || true
 btmgmt -i hci0 connectable on || true
 btmgmt -i hci0 advertising on || true
 
@@ -428,7 +428,7 @@ agent NoInputNoOutput
 default-agent
 set-alias Factor-Client
 pairable on
-discoverable on
+discoverable off
 discoverable-timeout 0
 menu advertise
 name on
@@ -517,6 +517,53 @@ EOF
     fi
 }
 
+# Headless BLE agent + advertiser (NoInputNoOutput)
+setup_ble_headless_service() {
+    log_step "BLE 헤드리스 에이전트/광고 서비스 설치 중..."
+
+    cat > /usr/local/bin/ble_headless.sh << 'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+# 어댑터 전원 및 모드
+bluetoothctl --timeout 2 power on || true
+bluetoothctl --timeout 2 pairable on || true
+bluetoothctl --timeout 2 discoverable off || true
+
+# 화면 없는 자동 수락 에이전트(Just Works)
+bluetoothctl --timeout 2 agent NoInputNoOutput || true
+bluetoothctl --timeout 2 default-agent || true
+
+# LE 광고: 커스텀 서비스 UUID 노출
+bluetoothctl --timeout 2 advertise off || true
+bluetoothctl --timeout 2 menu advertise || true
+echo -e "uuids 12345678-1234-1234-1234-123456789abc\nname Factor-Client\nappearance 0\nback\n" | bluetoothctl || true
+bluetoothctl --timeout 2 advertise on || true
+
+exit 0
+SH
+    chmod +x /usr/local/bin/ble_headless.sh
+
+    cat > /etc/systemd/system/ble-headless.service << 'UNIT'
+[Unit]
+Description=Headless BLE agent & advertiser (NoInputNoOutput)
+After=bluetooth.service
+Wants=bluetooth.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/ble_headless.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+    systemctl daemon-reload
+    systemctl enable --now ble-headless.service || true
+    log_info "BLE 헤드리스 서비스 설치/활성화 완료"
+}
+
 # 방화벽 설정
 setup_firewall() {
     log_step "방화벽 설정 중..."
@@ -586,6 +633,7 @@ main() {
     setup_bluetooth
     setup_bluetooth_autoconfig_service
     setup_ble_permissions_and_experimental
+    setup_ble_headless_service
     setup_service
     setup_firewall
     
