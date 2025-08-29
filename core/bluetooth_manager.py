@@ -90,6 +90,8 @@ class BluetoothManager:
                             "루트 권한이 아니므로 서비스 시작을 건너뜁니다. "
                             "관리자 권한에서 'sudo systemctl enable --now bluetooth'를 실행하세요."
                         )
+                except Exception as e:
+                    self.logger.warning(f"블루투스 서비스 시작 시도 중 예외: {e}")
                 
         except Exception as e:
             self.logger.error(f"블루투스 초기화 실패: {e}")
