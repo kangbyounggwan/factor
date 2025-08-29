@@ -6,6 +6,7 @@ pyyaml>=6.0.1
 flask>=2.3.3
 flask-socketio>=5.3.6
 python-socketio>=5.9.0
+dbus-next>=0.2.3
 
 # System monitoring
 psutil>=5.9.6

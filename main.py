@@ -21,6 +21,7 @@ sys.path.insert(0, str(project_root))
 
 from core import ConfigManager, FactorClient, setup_logger
 from core.bluetooth_manager import BluetoothManager
+from core.ble_gatt_server import start_ble_gatt_server
 from web import create_app, socketio
 
 
@@ -76,7 +77,9 @@ class FactorClientFirmware:
                 self.bluetooth_manager = BluetoothManager(self.config_manager)
                 # 블루투스 서비스 시작 및 장비 스캔
                 try:
-                    self.bluetooth_manager.start_discovery_service()
+                    # 스캔 비활성화 정책으로 발견 워커는 사용하지 않음
+                    # GATT 서버 시작(백그라운드)
+                    start_ble_gatt_server(self.logger)
                 except Exception as e:
                     self.logger.warning(f"블루투스 초기화 실패 (계속 진행): {e}")
             else:
