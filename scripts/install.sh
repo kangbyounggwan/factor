@@ -352,6 +352,7 @@ DiscoverableTimeout = 0
 PairableTimeout = 0
 Privacy = off
 Key = 00000000000000000000000000000000
+ControllerMode = le
 
 [Policy]
 AutoEnable=true
@@ -631,9 +632,7 @@ main() {
     setup_readonly_root
     setup_usb_permissions
     setup_bluetooth
-    setup_bluetooth_autoconfig_service
     setup_ble_permissions_and_experimental
-    setup_ble_headless_service
     setup_service
     setup_firewall
     
@@ -648,8 +647,8 @@ main() {
         else
             log_warning "블루투스 인터페이스가 비활성화되어 있습니다. 재부팅 후 자동 활성화됩니다."
         fi
-        # 광고/발견 가능 상태 확인 힌트 출력
-        log_info "참고: bluetoothctl show 에서 Discoverable: yes, ActiveInstances > 0 이어야 검색/광고 중입니다."
+        # 상태 확인 힌트 출력(BLE-only)
+        log_info "참고: bluetoothctl show 에서 Discoverable: no, ActiveInstances > 0 이어야 BLE 광고 중입니다."
     else
         log_error "블루투스 서비스가 실행되지 않고 있습니다."
         log_info "다음 명령어로 수동으로 시작할 수 있습니다:"
