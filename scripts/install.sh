@@ -465,6 +465,58 @@ EOF
     log_info "블루투스 자동 설정 서비스 설치 완료"
 }
 
+# iwlist sudo 허용 및 bluetoothd experimental 활성화
+setup_ble_permissions_and_experimental() {
+    log_step "BLE 권한 및 bluetoothd experimental 옵션 설정 중..."
+
+    # 1) iwlist 절대 경로 확인
+    IWLIST_PATH=$(command -v iwlist || true)
+    if [ -z "$IWLIST_PATH" ]; then
+        # 대부분 /usr/sbin/iwlist
+        if [ -x /usr/sbin/iwlist ]; then
+            IWLIST_PATH=/usr/sbin/iwlist
+        elif [ -x /sbin/iwlist ]; then
+            IWLIST_PATH=/sbin/iwlist
+        fi
+    fi
+
+    if [ -n "$IWLIST_PATH" ]; then
+        log_info "iwlist 경로: $IWLIST_PATH"
+        # factor 사용자가 비밀번호 없이 iwlist 실행 가능하도록 sudoers 규칙 추가
+        cat > /etc/sudoers.d/factor-iwlist << EOF
+factor ALL=(root) NOPASSWD: $IWLIST_PATH
+Defaults!$IWLIST_PATH !requiretty
+EOF
+        chmod 440 /etc/sudoers.d/factor-iwlist
+        log_info "sudoers에 iwlist 허용 규칙 추가"
+    else
+        log_warning "iwlist 바이너리를 찾을 수 없습니다. 무선 스캔 응답이 실패할 수 있습니다."
+    fi
+
+    # 2) bluetoothd -E (experimental) 활성화 (LEAdvertisingManager1 안정 제공)
+    mkdir -p /etc/systemd/system/bluetooth.service.d
+    BLUETOOTHD_BIN=""
+    if [ -x /usr/libexec/bluetooth/bluetoothd ]; then
+        BLUETOOTHD_BIN=/usr/libexec/bluetooth/bluetoothd
+    elif [ -x /usr/lib/bluetooth/bluetoothd ]; then
+        BLUETOOTHD_BIN=/usr/lib/bluetooth/bluetoothd
+    elif command -v bluetoothd >/dev/null 2>&1; then
+        BLUETOOTHD_BIN=$(command -v bluetoothd)
+    fi
+    if [ -n "$BLUETOOTHD_BIN" ]; then
+        cat > /etc/systemd/system/bluetooth.service.d/override.conf << EOF
+[Service]
+ExecStart=
+ExecStart=$BLUETOOTHD_BIN -E
+EOF
+        systemctl daemon-reload
+        systemctl restart bluetooth.service || true
+        log_info "bluetoothd에 experimental 옵션(-E) 적용"
+    else
+        log_warning "bluetoothd 실행 파일을 찾지 못했습니다. experimental 적용 생략"
+    fi
+}
+
 # 방화벽 설정
 setup_firewall() {
     log_step "방화벽 설정 중..."
@@ -533,6 +585,7 @@ main() {
     setup_usb_permissions
     setup_bluetooth
     setup_bluetooth_autoconfig_service
+    setup_ble_permissions_and_experimental
     setup_service
     setup_firewall
     
