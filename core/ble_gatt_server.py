@@ -149,6 +149,16 @@ class GattCharacteristic(ServiceInterface):
 
     def _notify_value(self, value: bytes):
         self._value = value
+        # 응답(Notify) 프리뷰 로깅
+        try:
+            preview = value[:256].decode('utf-8', 'replace')
+            logging.getLogger('ble-gatt').info(
+                "Notify [%s] bytes=%d preview=%s", self.uuid, len(value), preview
+            )
+        except Exception:
+            logging.getLogger('ble-gatt').info(
+                "Notify [%s] bytes=%d (non-utf8)", self.uuid, len(value)
+            )
         if self._notifying:
             try:
                 self.emit_properties_changed({'Value': Variant('ay', value)}, [])
@@ -234,6 +244,16 @@ class WifiRegisterChar(GattCharacteristic):
     @method()
     def WriteValue(self, value: 'ay', options: 'a{sv}'):
         raw = bytes(value)
+        # 요청(Write) 프리뷰 로깅
+        try:
+            preview = raw[:256].decode('utf-8', 'replace')
+            logging.getLogger('ble-gatt').info(
+                "Write [%s] bytes=%d preview=%s", self.uuid, len(raw), preview
+            )
+        except Exception:
+            logging.getLogger('ble-gatt').info(
+                "Write [%s] bytes=%d (non-utf8)", self.uuid, len(raw)
+            )
         try:
             msg = json.loads(raw.decode('utf-8', 'ignore'))
             mtype = str(msg.get('type', '')).lower()
@@ -263,6 +283,16 @@ class EquipmentSettingsChar(GattCharacteristic):
     @method()
     def WriteValue(self, value: 'ay', options: 'a{sv}'):
         raw = bytes(value)
+        # 요청(Write) 프리뷰 로깅
+        try:
+            preview = raw[:256].decode('utf-8', 'replace')
+            logging.getLogger('ble-gatt').info(
+                "Write [%s] bytes=%d preview=%s", self.uuid, len(raw), preview
+            )
+        except Exception:
+            logging.getLogger('ble-gatt').info(
+                "Write [%s] bytes=%d (non-utf8)", self.uuid, len(raw)
+            )
         try:
             msg = json.loads(raw.decode('utf-8', 'ignore'))
             if str(msg.get('type', '')).lower() == 'equipment_update':
