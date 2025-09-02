@@ -232,7 +232,7 @@ class WifiRegisterChar(GattCharacteristic):
         super().__init__(WIFI_REGISTER_CHAR_UUID, ['write', 'notify'], WIFI_CHAR_PATH)
 
     @method()
-    def WriteValue(self, value: List[int], options: Dict[str, Any]):
+    def WriteValue(self, value: 'ay', options: 'a{sv}'):
         raw = bytes(value)
         try:
             msg = json.loads(raw.decode('utf-8', 'ignore'))
@@ -261,7 +261,7 @@ class EquipmentSettingsChar(GattCharacteristic):
         self._settings: Dict[str, Any] = {}
 
     @method()
-    def WriteValue(self, value: List[int], options: Dict[str, Any]):
+    def WriteValue(self, value: 'ay', options: 'a{sv}'):
         raw = bytes(value)
         try:
             msg = json.loads(raw.decode('utf-8', 'ignore'))
