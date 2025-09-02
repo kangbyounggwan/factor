@@ -28,6 +28,9 @@ SERVICE_UUID = "12345678-1234-1234-1234-123456789abc"
 WIFI_REGISTER_CHAR_UUID = "87654321-4321-4321-4321-cba987654321"
 EQUIPMENT_SETTINGS_CHAR_UUID = "87654321-4321-4321-4321-cba987654322"
 
+# Notify 청크 크기(보수적으로 244 바이트 권장)
+MAX_CHUNK = 244
+
 # BlueZ IFACE
 BLUEZ = 'org.bluez'
 GATT_MANAGER_IFACE = 'org.bluez.GattManager1'
@@ -159,11 +162,31 @@ class GattCharacteristic(ServiceInterface):
             logging.getLogger('ble-gatt').info(
                 "Notify [%s] bytes=%d (non-utf8)", self.uuid, len(value)
             )
-        if self._notifying:
-            try:
-                self.emit_properties_changed({'Value': Variant('ay', value)}, [])
-            except Exception:
-                pass
+        if not self._notifying:
+            return
+
+        loop = asyncio.get_event_loop()
+
+        async def _send_chunks(data: bytes):
+            for off in range(0, len(data), MAX_CHUNK):
+                chunk = data[off:off + MAX_CHUNK]
+                try:
+                    self.emit_properties_changed({'Value': Variant('ay', chunk)}, [])
+                except Exception:
+                    pass
+                # 너무 빠른 연속 notify 방지
+                await asyncio.sleep(0.01)
+
+        try:
+            loop.create_task(_send_chunks(value))
+        except RuntimeError:
+            # 실행 루프가 없을 때 동기식 베스트-에포트
+            for off in range(0, len(value), MAX_CHUNK):
+                chunk = value[off:off + MAX_CHUNK]
+                try:
+                    self.emit_properties_changed({'Value': Variant('ay', chunk)}, [])
+                except Exception:
+                    pass
 
     @dbus_property(access=PropertyAccess.READ)
     def UUID(self) -> 's':  # type: ignore
