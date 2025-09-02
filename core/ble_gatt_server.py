@@ -275,6 +275,46 @@ class EquipmentSettingsChar(GattCharacteristic):
         self._notify_value(_json_bytes(rsp))
 
 
+class NoIOAgent(ServiceInterface):
+    """BlueZ Agent1 구현 - NoInputNoOutput (자동 수락)"""
+    def __init__(self, path: str = '/org/factor/agent'):
+        super().__init__('org.bluez.Agent1')
+        self.path = path
+
+    @method()
+    def Release(self):
+        pass
+
+    @method()
+    def RequestPinCode(self, device: 'o') -> 's':  # type: ignore
+        return ''
+
+    @method()
+    def RequestPasskey(self, device: 'o') -> 'u':  # type: ignore
+        return 0
+
+    @method()
+    def DisplayPasskey(self, device: 'o', passkey: 'u', entered: 'y'):  # type: ignore
+        pass
+
+    @method()
+    def DisplayPinCode(self, device: 'o', pincode: 's'):  # type: ignore
+        pass
+
+    @method()
+    def RequestConfirmation(self, device: 'o', passkey: 'u'):  # type: ignore
+        # 숫자 비교 자동 승인
+        return
+
+    @method()
+    def AuthorizeService(self, device: 'o', uuid: 's'):  # type: ignore
+        # 서비스 사용 허용
+        return
+
+    @method()
+    def Cancel(self):
+        pass
+
 class LEAdvertisement(ServiceInterface):
     def __init__(self, service_uuid: str):
         super().__init__('org.bluez.LEAdvertisement1')
@@ -335,6 +375,22 @@ async def _async_run(logger: logging.Logger):
     svc = GattService(SERVICE_UUID)
     wifi_char = WifiRegisterChar()
     equip_char = EquipmentSettingsChar()
+
+    # Agent 등록 (자동 수락)
+    try:
+        root_obj = await bus.introspect(BLUEZ, '/org/bluez')
+        root = bus.get_proxy_object(BLUEZ, '/org/bluez', root_obj)
+        agent_mgr = root.get_interface('org.bluez.AgentManager1')
+
+        agent = NoIOAgent()
+        agent_path = agent.path
+        bus.export(agent_path, agent)
+
+        await agent_mgr.call_register_agent(agent_path, 'NoInputNoOutput')
+        await agent_mgr.call_request_default_agent(agent_path)
+        logger.info("BLE Agent 등록 완료 (capability=NoInputNoOutput, path=%s)", agent_path)
+    except Exception as e:
+        logger.warning("BLE Agent 등록 실패: %s", e)
 
     # 구성 로그: 서비스/특성/플래그
     try:
