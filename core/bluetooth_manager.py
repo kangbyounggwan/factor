@@ -127,16 +127,12 @@ class BluetoothManager:
                 subprocess.run(['bluetoothctl', '--timeout', '3', 'power', 'on'], check=False)
             except Exception:
                 pass
-            # 광고 재설정: off 후 on (상태 불명확 시 안전)
+            # 컨트롤러 기본 광고는 비활성화하고, GATT 서버가 광고를 담당
             try:
                 subprocess.run(['bluetoothctl', '--timeout', '3', 'advertise', 'off'], check=False)
+                self.logger.info("컨트롤러 기본 광고 비활성화 (GATT 서버가 광고 담당)")
             except Exception:
                 pass
-            try:
-                subprocess.run(['bluetoothctl', '--timeout', '3', 'advertise', 'on'], check=False)
-                self.logger.info("BLE 광고(advertise on) 활성화")
-            except Exception as e:
-                self.logger.warning(f"BLE 광고 활성화 실패: {e}")
             
             self.logger.info("블루투스 인터페이스가 활성화되었습니다")
             

@@ -126,15 +126,15 @@ class GattService(ServiceInterface):
         self.path = SERVICE_PATH
 
     @dbus_property(access=PropertyAccess.READ)
-    def UUID(self) -> 's':
+    def UUID(self) -> str:
         return self.uuid
 
     @dbus_property(access=PropertyAccess.READ)
-    def Primary(self) -> 'b':
+    def Primary(self) -> bool:
         return True
 
     @dbus_property(access=PropertyAccess.READ)
-    def Includes(self) -> 'ao':
+    def Includes(self) -> List[str]:
         return []
 
 
@@ -156,20 +156,20 @@ class GattCharacteristic(ServiceInterface):
                 pass
 
     @dbus_property(access=PropertyAccess.READ)
-    def UUID(self) -> 's':
+    def UUID(self) -> str:
         return self.uuid
 
     @dbus_property(access=PropertyAccess.READ)
-    def Flags(self) -> 'as':
+    def Flags(self) -> List[str]:
         return self.flags
 
     @dbus_property(access=PropertyAccess.READ)
-    def Service(self) -> 'o':
+    def Service(self) -> str:
         return SERVICE_PATH
 
     @dbus_property(access=PropertyAccess.READ)
-    def Value(self) -> 'ay':
-        return self._value
+    def Value(self) -> List[int]:
+        return list(self._value)
 
     @method()
     def StartNotify(self):
@@ -180,11 +180,11 @@ class GattCharacteristic(ServiceInterface):
         self._notifying = False
 
     @method()
-    def ReadValue(self, options: 'a{sv}') -> 'ay':
+    def ReadValue(self, options: Dict[str, Any]) -> List[int]:
         return list(self._value)
 
     @method()
-    def WriteValue(self, value: 'ay', options: 'a{sv}'):
+    def WriteValue(self, value: List[int], options: Dict[str, Any]):
         # override
         pass
 
@@ -198,7 +198,7 @@ class ObjectManager(ServiceInterface):
         self.service_uuid = service_uuid
 
     @method()
-    def GetManagedObjects(self) -> 'a{oa{sa{sv}}}':
+    def GetManagedObjects(self) -> Dict[str, Dict[str, Dict[str, Any]]]:
         managed = {}
         # Service properties
         managed[SERVICE_PATH] = {
@@ -232,7 +232,7 @@ class WifiRegisterChar(GattCharacteristic):
         super().__init__(WIFI_REGISTER_CHAR_UUID, ['write', 'notify'], WIFI_CHAR_PATH)
 
     @method()
-    def WriteValue(self, value: 'ay', options: 'a{sv}'):
+    def WriteValue(self, value: List[int], options: Dict[str, Any]):
         raw = bytes(value)
         try:
             msg = json.loads(raw.decode('utf-8', 'ignore'))
@@ -261,7 +261,7 @@ class EquipmentSettingsChar(GattCharacteristic):
         self._settings: Dict[str, Any] = {}
 
     @method()
-    def WriteValue(self, value: 'ay', options: 'a{sv}'):
+    def WriteValue(self, value: List[int], options: Dict[str, Any]):
         raw = bytes(value)
         try:
             msg = json.loads(raw.decode('utf-8', 'ignore'))
@@ -282,19 +282,19 @@ class LEAdvertisement(ServiceInterface):
         self.path = ADV_PATH
 
     @dbus_property(access=PropertyAccess.READ)
-    def Type(self) -> 's':
+    def Type(self) -> str:
         return 'peripheral'
 
     @dbus_property(access=PropertyAccess.READ)
-    def ServiceUUIDs(self) -> 'as':
+    def ServiceUUIDs(self) -> List[str]:
         return [self.service_uuid]
 
     @dbus_property(access=PropertyAccess.READ)
-    def LocalName(self) -> 's':
+    def LocalName(self) -> str:
         return 'Factor-Client'
 
     @dbus_property(access=PropertyAccess.READ)
-    def Includes(self) -> 'as':
+    def Includes(self) -> List[str]:
         return ['tx-power']
 
     @method()
@@ -364,7 +364,7 @@ async def _async_run(logger: logging.Logger):
     except Exception:
         logger.info("BLE GATT Application 등록 완료")
 
-    # 광고 등록(실패 무시)
+    # 광고 등록: 실패 시 원인 진단에 도움이 되도록 경고 강화
     if adv_mgr:
         try:
             adv = LEAdvertisement(SERVICE_UUID)
@@ -379,7 +379,10 @@ async def _async_run(logger: logging.Logger):
             except Exception:
                 logger.info("BLE 광고 등록 완료 (LEAdvertisingManager1)")
         except Exception as e:
-            logger.warning(f"BLE 광고 등록 실패(무시): {e}")
+            logger.warning(
+                "BLE 광고 등록 실패: %s. 중복 광고 서비스(ble-headless, bluetoothctl advertise on) 혹은 권한/experimental(-E) 설정을 확인하세요.",
+                e
+            )
 
     # keep alive
     try:

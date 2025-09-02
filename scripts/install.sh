@@ -404,67 +404,8 @@ EOF
     log_info "Polkit 규칙 적용 완료: bluetooth 그룹에 org.bluez 액션 허용"
 }
 
-# 블루투스 자동 설정 oneshot 서비스 설치
-setup_bluetooth_autoconfig_service() {
-    log_step "블루투스 자동 설정 서비스 설치 중..."
-
-    # 실행 스크립트 생성 (bluetoothctl advertise 메뉴 시퀀스 포함)
-    cat > /usr/local/sbin/factor-bt-setup.sh << 'EOS'
-#!/bin/bash
-set -e
-
-rfkill unblock bluetooth || true
-hciconfig hci0 up || true
-
-# BLE only: BR/EDR 끔, LE만 사용
-btmgmt -i hci0 le on || true
-btmgmt -i hci0 bredr off || true
-btmgmt -i hci0 connectable on || true
-btmgmt -i hci0 advertising on || true
-
-# bluetoothctl로 discoverable, pairable 및 광고 데이터 구성
-bluetoothctl << 'BTEOF'
-power on
-agent NoInputNoOutput
-default-agent
-set-alias Factor-Client
-pairable on
-discoverable off
-discoverable-timeout 0
-menu advertise
-name on
-appearance on
-tx-power on
-# 필요 시 사용자 서비스 UUID를 광고에 추가하려면 아래 라인 예시를 해제하세요
-# uuids 12345678-1234-1234-1234-1234567890ab
-back
-advertise on
-BTEOF
-EOS
-
-    chmod +x /usr/local/sbin/factor-bt-setup.sh
-
-    cat > /etc/systemd/system/factor-bt-setup.service << 'EOF'
-[Unit]
-Description=Factor Bluetooth post-start setup
-After=bluetooth.service
-Requires=bluetooth.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/sbin/factor-bt-setup.sh
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    systemctl daemon-reload
-    systemctl enable factor-bt-setup.service
-    # 즉시 적용
-    systemctl start factor-bt-setup.service || true
-
-    log_info "블루투스 자동 설정 서비스 설치 완료"
-}
+# (제거됨) 블루투스 자동 설정 oneshot 서비스 설치
+# 중복 광고를 유발할 수 있는 bluetoothctl advertise on 자동 구성을 삭제했습니다.
 
 # iwlist sudo 허용 및 bluetoothd experimental 활성화
 setup_ble_permissions_and_experimental() {
@@ -518,52 +459,8 @@ EOF
     fi
 }
 
-# Headless BLE agent + advertiser (NoInputNoOutput)
-setup_ble_headless_service() {
-    log_step "BLE 헤드리스 에이전트/광고 서비스 설치 중..."
-
-    cat > /usr/local/bin/ble_headless.sh << 'SH'
-#!/usr/bin/env bash
-set -euo pipefail
-
-# 어댑터 전원 및 모드
-bluetoothctl --timeout 2 power on || true
-bluetoothctl --timeout 2 pairable on || true
-bluetoothctl --timeout 2 discoverable off || true
-
-# 화면 없는 자동 수락 에이전트(Just Works)
-bluetoothctl --timeout 2 agent NoInputNoOutput || true
-bluetoothctl --timeout 2 default-agent || true
-
-# LE 광고: 커스텀 서비스 UUID 노출
-bluetoothctl --timeout 2 advertise off || true
-bluetoothctl --timeout 2 menu advertise || true
-echo -e "uuids 12345678-1234-1234-1234-123456789abc\nname Factor-Client\nappearance 0\nback\n" | bluetoothctl || true
-bluetoothctl --timeout 2 advertise on || true
-
-exit 0
-SH
-    chmod +x /usr/local/bin/ble_headless.sh
-
-    cat > /etc/systemd/system/ble-headless.service << 'UNIT'
-[Unit]
-Description=Headless BLE agent & advertiser (NoInputNoOutput)
-After=bluetooth.service
-Wants=bluetooth.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/ble_headless.sh
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-
-    systemctl daemon-reload
-    systemctl enable --now ble-headless.service || true
-    log_info "BLE 헤드리스 서비스 설치/활성화 완료"
-}
+# (제거됨) Headless BLE agent + advertiser (NoInputNoOutput)
+# ble-headless 서비스/스크립트 설치 코드를 삭제했습니다.
 
 # 방화벽 설정
 setup_firewall() {
