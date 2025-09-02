@@ -386,9 +386,9 @@ async def _async_run(logger: logging.Logger):
         agent_path = agent.path
         bus.export(agent_path, agent)
 
-        await agent_mgr.call_register_agent(agent_path, 'NoInputNoOutput')
+        await agent_mgr.call_register_agent(agent_path, 'DisplayYesNo')
         await agent_mgr.call_request_default_agent(agent_path)
-        logger.info("BLE Agent 등록 완료 (capability=NoInputNoOutput, path=%s)", agent_path)
+        logger.info("BLE Agent 등록 완료 (capability=DisplayYesNo, path=%s)", agent_path)
     except Exception as e:
         logger.warning("BLE Agent 등록 실패: %s", e)
 
