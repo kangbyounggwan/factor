@@ -229,6 +229,7 @@ class GattCharacteristic(ServiceInterface):
         loop = asyncio.get_event_loop()
 
         async def _send_chunks(data: bytes):
+            await asyncio.sleep(0.03)
             for off in range(0, len(data), MAX_CHUNK):
                 chunk = data[off:off + MAX_CHUNK]
                 # 청크별 로깅 (프리뷰: 텍스트/헥스)
