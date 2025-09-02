@@ -122,6 +122,72 @@ def _scan_wifi_networks() -> List[Dict[str, Any]]:
         return networks
 
 
+def _get_network_status() -> Dict[str, Any]:
+    """현재 네트워크 상태 요약(wifi/ethernet) 반환.
+    - wifi: ssid, ip, gateway, connected
+    - ethernet: ip, gateway, connected
+    """
+    status: Dict[str, Any] = {
+        'wifi': {'interface': 'wlan0', 'connected': False, 'ssid': '', 'ip': '', 'gateway': ''},
+        'ethernet': {'interface': 'eth0', 'connected': False, 'ip': '', 'gateway': ''},
+    }
+
+    # 1) SSID 확인 (iwgetid)
+    try:
+        r = subprocess.run(['iwgetid', '-r'], capture_output=True, text=True, timeout=3)
+        if r.returncode == 0:
+            ssid = (r.stdout or '').strip()
+            if ssid:
+                status['wifi']['ssid'] = ssid
+                status['wifi']['connected'] = True
+    except Exception:
+        pass
+
+    # 2) IP 주소 확인 (psutil)
+    try:
+        import psutil  # type: ignore
+        addrs = psutil.net_if_addrs()
+        def _first_ipv4_addr(ifname: str) -> str:
+            for snic in addrs.get(ifname, []) or []:
+                if getattr(snic, 'family', None) == getattr(__import__('socket'), 'AF_INET', None):
+                    return snic.address or ''
+            return ''
+        status['wifi']['ip'] = _first_ipv4_addr('wlan0')
+        status['ethernet']['ip'] = _first_ipv4_addr('eth0')
+        if status['ethernet']['ip']:
+            status['ethernet']['connected'] = True
+    except Exception:
+        pass
+
+    # 3) 기본 게이트웨이 확인 (ip route)
+    try:
+        r = subprocess.run(['ip', 'route', 'show', 'default'], capture_output=True, text=True, timeout=3)
+        line = (r.stdout or '').splitlines()[0] if (r.returncode == 0 and (r.stdout or '').strip()) else ''
+        # 예: "default via 192.168.0.1 dev wlan0 proto dhcp metric 600"
+        if line:
+            parts = line.split()
+            gw = ''
+            dev = ''
+            if 'via' in parts:
+                try:
+                    gw = parts[parts.index('via') + 1]
+                except Exception:
+                    gw = ''
+            if 'dev' in parts:
+                try:
+                    dev = parts[parts.index('dev') + 1]
+                except Exception:
+                    dev = ''
+            if dev == 'wlan0':
+                status['wifi']['gateway'] = gw
+            elif dev == 'eth0':
+                status['ethernet']['gateway'] = gw
+    except Exception:
+        pass
+
+    return status
+
+
 class GattService(ServiceInterface):
     def __init__(self, uuid: str):
         super().__init__('org.bluez.GattService1')
@@ -165,11 +231,16 @@ class GattCharacteristic(ServiceInterface):
         async def _send_chunks(data: bytes):
             for off in range(0, len(data), MAX_CHUNK):
                 chunk = data[off:off + MAX_CHUNK]
-                # 청크별 로깅
+                # 청크별 로깅 (프리뷰: 텍스트/헥스)
+                try:
+                    preview_text = chunk[:128].decode('utf-8', 'replace')
+                except Exception:
+                    preview_text = ''
+                preview_hex = chunk[:32].hex()
                 try:
                     logging.getLogger('ble-gatt').info(
-                        "Notify-chunk [%s] off=%d len=%d/%d",
-                        self.uuid, off, len(chunk), len(data)
+                        "Notify-chunk [%s] off=%d len=%d/%d preview=%s hex=%s",
+                        self.uuid, off, len(chunk), len(data), preview_text, preview_hex
                     )
                 except Exception:
                     pass
@@ -297,6 +368,10 @@ class WifiRegisterChar(GattCharacteristic):
             except Exception:
                 nets_top = nets[:15]
             rsp = {"type": "wifi_scan_result", "data": nets_top, "timestamp": _now_ts()}
+            self._notify_value(_json_bytes(rsp))
+        elif mtype == 'get_network_status':
+            status = _get_network_status()
+            rsp = {"type": "get_network_status_result", "data": status, "timestamp": _now_ts()}
             self._notify_value(_json_bytes(rsp))
         elif mtype == 'wifi_register':
             ok = True
