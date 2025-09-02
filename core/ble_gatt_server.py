@@ -170,6 +170,14 @@ class GattCharacteristic(ServiceInterface):
         async def _send_chunks(data: bytes):
             for off in range(0, len(data), MAX_CHUNK):
                 chunk = data[off:off + MAX_CHUNK]
+                # 청크별 로깅
+                try:
+                    logging.getLogger('ble-gatt').info(
+                        "Notify-chunk [%s] off=%d len=%d/%d",
+                        self.uuid, off, len(chunk), len(data)
+                    )
+                except Exception:
+                    pass
                 try:
                     self.emit_properties_changed({'Value': Variant('ay', chunk)}, [])
                 except Exception:
