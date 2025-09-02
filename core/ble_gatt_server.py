@@ -28,8 +28,8 @@ SERVICE_UUID = "12345678-1234-1234-1234-123456789abc"
 WIFI_REGISTER_CHAR_UUID = "87654321-4321-4321-4321-cba987654321"
 EQUIPMENT_SETTINGS_CHAR_UUID = "87654321-4321-4321-4321-cba987654322"
 
-# Notify 청크 크기(보수적으로 244 바이트 권장)
-MAX_CHUNK = 20
+# Notify 청크 크기(보수적으로 180~200 권장)
+MAX_CHUNK = 200
 
 # BlueZ IFACE
 BLUEZ = 'org.bluez'
@@ -246,7 +246,7 @@ class GattCharacteristic(ServiceInterface):
                 except Exception:
                     pass
                 try:
-                    self.emit_properties_changed({'Value': Variant('ay', list(chunk))}, [])
+                    self.emit_properties_changed({'Value': Variant('ay', bytes(chunk))}, [])
                 except Exception:
                     pass
                 # 너무 빠른 연속 notify 방지
@@ -259,7 +259,7 @@ class GattCharacteristic(ServiceInterface):
             for off in range(0, len(value), MAX_CHUNK):
                 chunk = value[off:off + MAX_CHUNK]
                 try:
-                    self.emit_properties_changed({'Value': Variant('ay', list(chunk))}, [])
+                    self.emit_properties_changed({'Value': Variant('ay', bytes(chunk))}, [])
                 except Exception:
                     pass
 
@@ -279,6 +279,10 @@ class GattCharacteristic(ServiceInterface):
     def Value(self) -> 'ay':  # type: ignore
         return self._value
 
+    @dbus_property(access=PropertyAccess.READ)
+    def Notifying(self) -> 'b':  # type: ignore
+        return self._notifying
+
     @method()
     def StartNotify(self):
         self._notifying = True
@@ -286,6 +290,11 @@ class GattCharacteristic(ServiceInterface):
             logging.getLogger('ble-gatt').info(
                 "StartNotify [%s] path=%s", self.uuid, self.path
             )
+        except Exception:
+            pass
+        # Notifying=True 상태 변경 브로드캐스트
+        try:
+            self.emit_properties_changed({'Notifying': Variant('b', True)}, [])
         except Exception:
             pass
 
@@ -296,6 +305,11 @@ class GattCharacteristic(ServiceInterface):
             logging.getLogger('ble-gatt').info(
                 "StopNotify  [%s] path=%s", self.uuid, self.path
             )
+        except Exception:
+            pass
+        # Notifying=False 상태 변경 브로드캐스트
+        try:
+            self.emit_properties_changed({'Notifying': Variant('b', False)}, [])
         except Exception:
             pass
 
