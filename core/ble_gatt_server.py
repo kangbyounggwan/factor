@@ -126,15 +126,15 @@ class GattService(ServiceInterface):
         self.path = SERVICE_PATH
 
     @dbus_property(access=PropertyAccess.READ)
-    def UUID(self) -> str:
+    def UUID(self) -> 's':  # type: ignore
         return self.uuid
 
     @dbus_property(access=PropertyAccess.READ)
-    def Primary(self) -> bool:
+    def Primary(self) -> 'b':  # type: ignore
         return True
 
     @dbus_property(access=PropertyAccess.READ)
-    def Includes(self) -> List[str]:
+    def Includes(self) -> 'ao':  # type: ignore
         return []
 
 
@@ -156,20 +156,20 @@ class GattCharacteristic(ServiceInterface):
                 pass
 
     @dbus_property(access=PropertyAccess.READ)
-    def UUID(self) -> str:
+    def UUID(self) -> 's':  # type: ignore
         return self.uuid
 
     @dbus_property(access=PropertyAccess.READ)
-    def Flags(self) -> List[str]:
+    def Flags(self) -> 'as':  # type: ignore
         return self.flags
 
     @dbus_property(access=PropertyAccess.READ)
-    def Service(self) -> str:
+    def Service(self) -> 'o':  # type: ignore
         return SERVICE_PATH
 
     @dbus_property(access=PropertyAccess.READ)
-    def Value(self) -> List[int]:
-        return list(self._value)
+    def Value(self) -> 'ay':  # type: ignore
+        return self._value
 
     @method()
     def StartNotify(self):
@@ -180,11 +180,11 @@ class GattCharacteristic(ServiceInterface):
         self._notifying = False
 
     @method()
-    def ReadValue(self, options: Dict[str, Any]) -> List[int]:
+    def ReadValue(self, options: 'a{sv}') -> 'ay':  # type: ignore
         return list(self._value)
 
     @method()
-    def WriteValue(self, value: List[int], options: Dict[str, Any]):
+    def WriteValue(self, value: 'ay', options: 'a{sv}'):  # type: ignore
         # override
         pass
 
@@ -198,7 +198,7 @@ class ObjectManager(ServiceInterface):
         self.service_uuid = service_uuid
 
     @method()
-    def GetManagedObjects(self) -> Dict[str, Dict[str, Dict[str, Any]]]:
+    def GetManagedObjects(self) -> 'a{oa{sa{sv}}}':  # type: ignore
         managed = {}
         # Service properties
         managed[SERVICE_PATH] = {
@@ -282,19 +282,19 @@ class LEAdvertisement(ServiceInterface):
         self.path = ADV_PATH
 
     @dbus_property(access=PropertyAccess.READ)
-    def Type(self) -> str:
+    def Type(self) -> 's':  # type: ignore
         return 'peripheral'
 
     @dbus_property(access=PropertyAccess.READ)
-    def ServiceUUIDs(self) -> List[str]:
+    def ServiceUUIDs(self) -> 'as':  # type: ignore
         return [self.service_uuid]
 
     @dbus_property(access=PropertyAccess.READ)
-    def LocalName(self) -> str:
+    def LocalName(self) -> 's':  # type: ignore
         return 'Factor-Client'
 
     @dbus_property(access=PropertyAccess.READ)
-    def Includes(self) -> List[str]:
+    def Includes(self) -> 'as':  # type: ignore
         return ['tx-power']
 
     @method()
