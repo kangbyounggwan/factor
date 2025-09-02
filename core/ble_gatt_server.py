@@ -282,10 +282,22 @@ class GattCharacteristic(ServiceInterface):
     @method()
     def StartNotify(self):
         self._notifying = True
+        try:
+            logging.getLogger('ble-gatt').info(
+                "StartNotify [%s] path=%s", self.uuid, self.path
+            )
+        except Exception:
+            pass
 
     @method()
     def StopNotify(self):
         self._notifying = False
+        try:
+            logging.getLogger('ble-gatt').info(
+                "StopNotify  [%s] path=%s", self.uuid, self.path
+            )
+        except Exception:
+            pass
 
     @method()
     def ReadValue(self, options: 'a{sv}') -> 'ay':  # type: ignore
