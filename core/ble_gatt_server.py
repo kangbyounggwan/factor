@@ -229,7 +229,7 @@ class GattCharacteristic(ServiceInterface):
         loop = asyncio.get_event_loop()
 
         async def _send_chunks(data: bytes):
-            await asyncio.sleep(0.03)
+            await asyncio.sleep(0.1)
             for off in range(0, len(data), MAX_CHUNK):
                 chunk = data[off:off + MAX_CHUNK]
                 # 청크별 로깅 (프리뷰: 텍스트/헥스)
@@ -250,7 +250,7 @@ class GattCharacteristic(ServiceInterface):
                 except Exception:
                     pass
                 # 너무 빠른 연속 notify 방지
-                await asyncio.sleep(0.01)
+                await asyncio.sleep(0.05)
 
         try:
             loop.create_task(_send_chunks(value))
