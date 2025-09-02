@@ -245,7 +245,7 @@ class GattCharacteristic(ServiceInterface):
                 except Exception:
                     pass
                 try:
-                    self.emit_properties_changed({'Value': Variant('ay', chunk)}, [])
+                    self.emit_properties_changed({'Value': Variant('ay', list(chunk))}, [])
                 except Exception:
                     pass
                 # 너무 빠른 연속 notify 방지
@@ -258,7 +258,7 @@ class GattCharacteristic(ServiceInterface):
             for off in range(0, len(value), MAX_CHUNK):
                 chunk = value[off:off + MAX_CHUNK]
                 try:
-                    self.emit_properties_changed({'Value': Variant('ay', chunk)}, [])
+                    self.emit_properties_changed({'Value': Variant('ay', list(chunk))}, [])
                 except Exception:
                     pass
 
