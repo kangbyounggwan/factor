@@ -264,7 +264,13 @@ class WifiRegisterChar(GattCharacteristic):
 
         if mtype == 'wifi_scan':
             nets = _scan_wifi_networks()
-            rsp = {"type": "wifi_scan_result", "data": nets, "timestamp": _now_ts()}
+            # RSSI 내림차순 정렬 후 상위 15개만 반환
+            try:
+                nets_sorted = sorted(nets, key=lambda n: n.get('rssi', -100), reverse=True)
+                nets_top = nets_sorted[:15]
+            except Exception:
+                nets_top = nets[:15]
+            rsp = {"type": "wifi_scan_result", "data": nets_top, "timestamp": _now_ts()}
             self._notify_value(_json_bytes(rsp))
         elif mtype == 'wifi_register':
             ok = True
