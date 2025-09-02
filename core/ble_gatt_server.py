@@ -152,16 +152,11 @@ class GattCharacteristic(ServiceInterface):
 
     def _notify_value(self, value: bytes):
         self._value = value
-        # 응답(Notify) 프리뷰 로깅
-        try:
-            preview = value[:256].decode('utf-8', 'replace')
-            logging.getLogger('ble-gatt').info(
-                "Notify [%s] bytes=%d preview=%s", self.uuid, len(value), preview
-            )
-        except Exception:
-            logging.getLogger('ble-gatt').info(
-                "Notify [%s] bytes=%d (non-utf8)", self.uuid, len(value)
-            )
+        # 전체 본문은 전송하지 않고, 청크만 전송/로깅
+        logging.getLogger('ble-gatt').info(
+            "Notify-begin [%s] total_bytes=%d chunk_size=%d",
+            self.uuid, len(value), MAX_CHUNK
+        )
         if not self._notifying:
             return
 
