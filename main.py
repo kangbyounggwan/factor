@@ -20,8 +20,7 @@ project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
 from core import ConfigManager, FactorClient, setup_logger
-from core.bluetooth_manager import BluetoothManager
-from core.ble_gatt_server import start_ble_gatt_server
+from core.bluetooth_classic_server import B_RFCOMMServer
 from web import create_app, socketio
 
 
@@ -46,7 +45,7 @@ class FactorClientFirmware:
         # Factor 클라이언트 초기화
         self.factor_client = None
         self.web_app = None
-        self.bluetooth_manager = None
+        self.bt_classic_server = None
         self.running = False
         
         # 시그널 핸들러 등록
@@ -71,20 +70,16 @@ class FactorClientFirmware:
                 self.logger.error("설정이 유효하지 않습니다. 종료합니다.")
                 return False
             
-            # 블루투스 관리자 초기화 (Linux에서만)
+            # 블루투스 클래식 서버 초기화 (Linux에서만)
             import platform
             if platform.system() == "Linux":
-                self.bluetooth_manager = BluetoothManager(self.config_manager)
-                # 블루투스 서비스 시작 및 장비 스캔
                 try:
-                    # 스캔 비활성화 정책으로 발견 워커는 사용하지 않음
-                    # GATT 서버 시작(백그라운드)
-                    start_ble_gatt_server(self.logger)
+                    self.bt_classic_server = B_RFCOMMServer(channel=1)
+                    self.bt_classic_server.start()
                 except Exception as e:
-                    self.logger.warning(f"블루투스 초기화 실패 (계속 진행): {e}")
+                    self.logger.warning(f"블루투스 클래식 초기화 실패 (계속 진행): {e}")
             else:
-                self.logger.info(f"{platform.system()} 환경에서는 블루투스 기능을 건너뜁니다.")
-                self.bluetooth_manager = None
+                self.logger.info(f"{platform.system()} 환경에서는 블루투스 클래식을 건너뜁니다.")
             
             # Factor 클라이언트 시작 (연결 실패해도 계속 실행)
             self.factor_client = FactorClient(self.config_manager)
@@ -112,8 +107,7 @@ class FactorClientFirmware:
             # Flask 앱 생성
             self.web_app = create_app(self.config_manager, self.factor_client)
             
-            # 블루투스 관리자를 앱에 연결
-            self.web_app.bluetooth_manager = self.bluetooth_manager
+            # 블루투스 클래식은 웹앱에 별도 주입하지 않음
             
             # 웹 서버 설정
             host = server_config.get('host', '0.0.0.0')
@@ -191,10 +185,6 @@ class FactorClientFirmware:
                 if memory_percent > 85:
                     self.logger.warning(f"메모리 사용량 높음: {memory_percent}%")
                 
-                # 블루투스 상태 체크
-                if self.bluetooth_manager:
-                    # 블루투스 상태 로깅 (선택사항)
-                    pass
                 
             except Exception as e:
                 self.logger.error(f"주기적 작업 오류: {e}")
@@ -212,9 +202,9 @@ class FactorClientFirmware:
             if self.factor_client:
                 self.factor_client.stop()
             
-            # 블루투스 관리자 정리
-            if self.bluetooth_manager:
-                self.bluetooth_manager.stop_bluetooth()
+            # 블루투스 클래식 서버 정리
+            if self.bt_classic_server:
+                self.bt_classic_server.stop()
             
             # 설정 관리자 정리
             if self.config_manager:

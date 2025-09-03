@@ -11,7 +11,6 @@ from pathlib import Path
 import os
 
 from core import ConfigManager
-from core.bluetooth_manager import BluetoothManager
 from .api import api_bp
 from .socketio_handler import socketio
  
@@ -41,8 +40,7 @@ def create_app(config_manager: ConfigManager, factor_client=None):
     app.factor_client = factor_client
     app.config_manager = config_manager
     
-    # 블루투스 관리자 초기화
-    app.bluetooth_manager = BluetoothManager(config_manager)
+    # 블루투스 클래식은 웹앱에 매니저 주입이 필요하지 않음
     
     
     # 정적 파일 경로 설정
