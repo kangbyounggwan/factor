@@ -427,6 +427,27 @@ EOF
     log_info "Polkit 규칙 적용 완료: bluetooth 그룹에 org.bluez 액션 허용"
 }
 
+# NetworkManager 권한(Polkit) 설정
+setup_networkmanager_permissions() {
+    log_step "NetworkManager 접근 권한(Polkit) 설정 중..."
+
+    mkdir -p /etc/polkit-1/rules.d
+    cat > /etc/polkit-1/rules.d/90-factor-networkmanager.rules << 'EOF'
+polkit.addRule(function(action, subject) {
+  if (subject && subject.user == 'factor' && action && action.id && action.id.indexOf('org.freedesktop.NetworkManager') === 0) {
+    return polkit.Result.YES;
+  }
+});
+EOF
+
+    # polkit 데몬 규칙 재적용 (실패해도 진행)
+    if systemctl is-active --quiet polkit 2>/dev/null; then
+        systemctl reload polkit 2>/dev/null || systemctl restart polkit 2>/dev/null || true
+    fi
+
+    log_info "Polkit 규칙 적용 완료: factor 사용자에 NetworkManager 제어 허용"
+}
+
 # (제거됨) 블루투스 자동 설정 oneshot 서비스 설치
 # 중복 광고를 유발할 수 있는 bluetoothctl advertise on 자동 구성을 삭제했습니다.
 
@@ -553,6 +574,7 @@ main() {
     setup_usb_permissions
     setup_bluetooth
     setup_ble_permissions_and_experimental
+    setup_networkmanager_permissions
     setup_service
     setup_firewall
     
