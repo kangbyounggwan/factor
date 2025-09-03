@@ -370,7 +370,9 @@ class WifiRegisterChar(GattCharacteristic):
         super().__init__(WIFI_REGISTER_CHAR_UUID, ['write', 'indicate'], WIFI_CHAR_PATH)
 
     @method()
-    def WriteValue(self, value, options):  # type: ignore[override]
+    def WriteValue(self, value: 'ay', options: 'a{sv}'):  # noqa
+    @method()
+    def WriteValue(self, value: 'ay', options: 'a{sv}'):  # noqa
         raw = bytes(value)
         # 요청(Write) 프리뷰 로깅
         try:
@@ -419,7 +421,7 @@ class EquipmentSettingsChar(GattCharacteristic):
         self._settings: Dict[str, Any] = {}
 
     @method()
-    def WriteValue(self, value, options):  # type: ignore[override]
+    def WriteValue(self, value: 'ay', options: 'a{sv}'):
         raw = bytes(value)
         # 요청(Write) 프리뷰 로깅
         try:
