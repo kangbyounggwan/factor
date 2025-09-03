@@ -219,7 +219,7 @@ class GattCharacteristic(ServiceInterface):
         self._value = value
         # 전체 본문은 전송하지 않고, 청크만 전송/로깅
         logging.getLogger('ble-gatt').info(
-            "Notify-begin [%s] total_bytes=%d chunk_size=%d",
+            "Indicate-begin [%s] total_bytes=%d chunk_size=%d",
             self.uuid, len(value), MAX_CHUNK
         )
         if not self._notifying:
@@ -239,7 +239,7 @@ class GattCharacteristic(ServiceInterface):
                 preview_hex = chunk[:32].hex()
                 try:
                     logging.getLogger('ble-gatt').info(
-                        "Notify-chunk [%s] off=%d len=%d/%d preview=%s hex=%s",
+                        "Indicate-chunk [%s] off=%d len=%d/%d preview=%s hex=%s",
                         self.uuid, off, len(chunk), len(data), preview_text, preview_hex
                     )
                 except Exception:
@@ -405,7 +405,7 @@ class WifiRegisterChar(GattCharacteristic):
             rsp = {"type": "get_network_status_result", "op_id": op_id, "data": status, "timestamp": _now_ts()}
             self._notify_value(_json_bytes(rsp))
 
-            async def _await_status_ack(op: str, timeout_s: float = 5.0):
+            async def _await_status_ack(op: str, timeout_s: float = 15.0):
                 try:
                     await _asyncio.sleep(timeout_s)
                     if op in self._pending_status_acks:
