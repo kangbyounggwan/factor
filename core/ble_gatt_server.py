@@ -364,7 +364,7 @@ class WifiRegisterChar(GattCharacteristic):
         except Exception:
             logging.getLogger('ble-gatt').exception("WriteValue JSON 파싱 실패")
             rsp = {"type": "wifi_scan_result", "data": {"success": False, "error": "invalid_json"}, "timestamp": _now_ts()}
-            self._notify_value(_json_bytes(rsp))
+            self._notify_value(_json_bytes_ext(rsp))
             return
         
         
@@ -395,7 +395,7 @@ class WifiRegisterChar(GattCharacteristic):
                 logging.getLogger('ble-gatt').exception("Wi-Fi 스캔 결과 정렬 실패")
                 nets_top = nets[:15]
             rsp = {"type": "wifi_scan_result", "data": nets_top, "timestamp": _now_ts()}
-            self._enqueue_framed('result', _json_bytes(rsp))
+            self._enqueue_framed('result', _json_bytes_ext(rsp))
         
         # 네트워크 상태 조회
         elif mtype == 'get_network_status':
@@ -416,7 +416,7 @@ class WifiRegisterChar(GattCharacteristic):
             _t.sleep(0.2)
             status = _get_network_status_ext()
             rsp = {"type": "get_network_status_result", "data": status, "timestamp": _now_ts_ext()}
-            payload = _json_bytes(rsp)
+            payload = _json_bytes_ext(rsp)
             self._enqueue_framed('result', payload)
         
         # 네트워크 연결
@@ -456,7 +456,7 @@ class WifiRegisterChar(GattCharacteristic):
             self._enqueue_framed('result', _json_bytes_ext(rsp))
         else:
             rsp = {"type": "wifi_error", "data": {"success": False, "error": "unknown_type", "type": mtype}, "timestamp": _now_ts()}
-            self._notify_value(_json_bytes(rsp))
+            self._notify_value(_json_bytes_ext(rsp))
 
 
 class EquipmentSettingsChar(GattCharacteristic):
@@ -486,7 +486,7 @@ class EquipmentSettingsChar(GattCharacteristic):
                 rsp = {"type": "equipment_error", "data": {"ok": False, "error": "unknown_type"}, "timestamp": _now_ts()}
         except Exception:
             rsp = {"type": "equipment_error", "data": {"ok": False, "error": "invalid_json"}, "timestamp": _now_ts()}
-        self._notify_value(_json_bytes(rsp))
+        self._notify_value(_json_bytes_ext(rsp))
 
 
 class NoIOAgent(ServiceInterface):
