@@ -246,7 +246,7 @@ class GattCharacteristic(ServiceInterface):
                 except Exception:
                     pass
                 try:
-                    self.emit_properties_changed({'Value': Variant('ay', bytes(chunk))}, [])
+                    self.emit_properties_changed({'Value': bytes(chunk)}, [])
                 except Exception:
                     pass
                 # 너무 빠른 연속 notify 방지
@@ -259,7 +259,7 @@ class GattCharacteristic(ServiceInterface):
             for off in range(0, len(value), MAX_CHUNK):
                 chunk = value[off:off + MAX_CHUNK]
                 try:
-                    self.emit_properties_changed({'Value': Variant('ay', bytes(chunk))}, [])
+                    self.emit_properties_changed({'Value': bytes(chunk)}, [])
                 except Exception:
                     pass
 
@@ -405,7 +405,10 @@ class WifiRegisterChar(GattCharacteristic):
             self._value = payload
             if self._notifying:
                 try:
-                    self.emit_properties_changed({'Value': Variant('ay', bytes(payload))}, [])
+                    self.emit_properties_changed({'Value': bytes(payload)}, [])
+                    logging.getLogger('ble-gatt').info(
+                        "Notify-full sent [%s], bytes=%d", self.uuid, len(payload)
+                    )
                 except Exception:
                     logging.getLogger('ble-gatt').exception(
                         "Notify-full error [%s], bytes=%d", self.uuid, len(payload)
