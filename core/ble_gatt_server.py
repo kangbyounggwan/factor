@@ -405,6 +405,18 @@ class WifiRegisterChar(GattCharacteristic):
         
         # 라즈베리파이에서 네트워크 스캔 결과 반환
         if mtype == 'wifi_scan':
+            # 즉시 ACK
+            try:
+                ack = {
+                    "ver": int(msg.get('ver', 1)),
+                    "id": msg.get('id') or "",
+                    "type": "wifi_scan_ack",
+                    "ts": _now_ms_ext(),
+                }
+                self._notify_value(_json_bytes_ext(ack))
+            except Exception:
+                logging.getLogger('ble-gatt').exception("wifi_scan ACK 전송 실패")
+
             nets = _scan_wifi_networks_ext()
             # RSSI 내림차순 정렬 후 상위 15개만 반환
             try:
@@ -418,6 +430,18 @@ class WifiRegisterChar(GattCharacteristic):
         
         # 네트워크 상태 조회
         elif mtype == 'get_network_status':
+            # 즉시 ACK
+            try:
+                ack = {
+                    "ver": int(msg.get('ver', 1)),
+                    "id": msg.get('id') or "",
+                    "type": "get_network_status_ack",
+                    "ts": _now_ms_ext(),
+                }
+                self._notify_value(_json_bytes_ext(ack))
+            except Exception:
+                logging.getLogger('ble-gatt').exception("get_network_status ACK 전송 실패")
+
             status = _get_network_status_ext()
             rsp = {"type": "get_network_status_result", "data": status, "timestamp": _now_ts_ext()}
             payload = _json_bytes(rsp)
@@ -427,6 +451,18 @@ class WifiRegisterChar(GattCharacteristic):
         # 네트워크 연결
         elif mtype == 'wifi_register':
             payload_in = msg.get('data') or {}
+            # 즉시 ACK
+            try:
+                ack = {
+                    "ver": int(msg.get('ver', 1)),
+                    "id": msg.get('id') or "",
+                    "type": "wifi_register_ack",
+                    "ts": _now_ms_ext(),
+                }
+                self._notify_value(_json_bytes_ext(ack))
+            except Exception:
+                logging.getLogger('ble-gatt').exception("wifi_register ACK 전송 실패")
+
             # NetworkManager 활성 시 nmcli 우선, 아니면 wpa_cli 사용
             try:
                 use_nm = _nm_is_running_ext()
