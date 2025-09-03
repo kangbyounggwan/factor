@@ -176,12 +176,12 @@ def wpa_connect_immediate(data: Dict[str, Any], persist: bool = False) -> Dict[s
                 return {"ok": False, "message": "WPA3 password length < 8", "ssid": ssid}
             set_net('key_mgmt', 'SAE')
             set_net('ieee80211w', '2')
-            set_net('sae_password', f'"{password.replace("\"", "\\\"")}"')
+            set_net('sae_password', '"%s"' % password.replace('"', '\\"'))
         else:
             if len(password) < 8:
                 return {"ok": False, "message": "WPA2 password length < 8", "ssid": ssid}
             set_net('key_mgmt', 'WPA-PSK')
-            set_net('psk', f'"{password.replace("\"", "\\\"")}"')
+            set_net('psk', '"%s"' % password.replace('"', '\\"'))
 
         for cmd in (['enable_network', nid], ['select_network', nid], ['reassociate']):
             rr = run(['wpa_cli', '-i', 'wlan0'] + cmd)
