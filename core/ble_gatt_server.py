@@ -428,6 +428,8 @@ class WifiRegisterChar(GattCharacteristic):
         elif mtype == 'wifi_register':
             payload_in = msg.get('data') or {}
             res = _wpa_connect_immediate_ext(payload_in, persist=False)
+
+            
             rsp = {
                 "ver": int(msg.get('ver', 1)),
                 "id": msg.get('id') or "",

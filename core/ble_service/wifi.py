@@ -153,13 +153,24 @@ def wpa_connect_immediate(data: Dict[str, Any], persist: bool = False) -> Dict[s
         return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
 
     try:
+        lg = logging.getLogger('ble-gatt')
+        lg.info("wpa_connect_immediate start ssid=%s security=%s hidden=%s priority=%s persist=%s",
+                ssid, security, hidden, priority, persist)
+
+        lg.info("wpa_cli add_network ...")
         r = run(['wpa_cli', '-i', 'wlan0', 'add_network'])
+        lg.info("add_network rc=%s out=%s err=%s", r.returncode, (r.stdout or '').strip(), (r.stderr or '').strip())
         if r.returncode != 0 or not (r.stdout or '').strip().isdigit():
-            return {"ok": False, "message": f"add_network failed: {r.stdout or r.stderr}"}
+            return {"ok": False, "message": f"add_network failed: {r.stdout or r.stderr}", "ssid": ssid}
         nid = (r.stdout or '').strip()
 
         def set_net(key: str, value: str):
+            masked = value
+            if key in ('psk', 'sae_password'):
+                masked = '"***"'
+            lg.info("set_network[%s]=%s", key, masked)
             rr = run(['wpa_cli', '-i', 'wlan0', 'set_network', nid, key, value])
+            lg.info("set_network rc=%s out=%s err=%s", rr.returncode, (rr.stdout or '').strip(), (rr.stderr or '').strip())
             if rr.returncode != 0 or 'FAIL' in (rr.stdout or ''):
                 raise RuntimeError(f"set_network {key} failed: {rr.stdout or rr.stderr}")
 
@@ -184,14 +195,18 @@ def wpa_connect_immediate(data: Dict[str, Any], persist: bool = False) -> Dict[s
             set_net('psk', '"%s"' % password.replace('"', '\\"'))
 
         for cmd in (['enable_network', nid], ['select_network', nid], ['reassociate']):
+            lg.info("wpa_cli %s ...", ' '.join(cmd))
             rr = run(['wpa_cli', '-i', 'wlan0'] + cmd)
+            lg.info("cmd rc=%s out=%s err=%s", rr.returncode, (rr.stdout or '').strip(), (rr.stderr or '').strip())
             if rr.returncode != 0 or 'FAIL' in (rr.stdout or ''):
                 return {"ok": False, "message": f"{' '.join(cmd)} failed: {rr.stdout or rr.stderr}", "ssid": ssid}
 
         if persist:
             run(['wpa_cli', '-i', 'wlan0', 'save_config'])
 
+        lg.info("wait_wifi_connected start timeout=25s")
         res = wait_wifi_connected(timeout_sec=25)
+        lg.info("wait_wifi_connected result: %s", res)
         if res.get('ok'):
             return {"ok": True, "message": "connected", "ssid": ssid}
         return {"ok": False, "message": "apply_done_but_not_connected", "ssid": ssid, "error": res.get('error')}
