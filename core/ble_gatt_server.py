@@ -16,6 +16,8 @@ import time
 import logging
 import subprocess
 from typing import Any, Dict, List
+from core.ble_service.utils import json_bytes as _json_bytes_ext, now_ts as _now_ts_ext, now_ms as _now_ms_ext
+from core.ble_service.wifi import scan_wifi_networks as _scan_wifi_networks_ext, get_network_status as _get_network_status_ext, wpa_connect_immediate as _wpa_connect_immediate_ext
 
 from dbus_next.aio import MessageBus
 from dbus_next.service import ServiceInterface, method, dbus_property
@@ -403,7 +405,7 @@ class WifiRegisterChar(GattCharacteristic):
         
         # 라즈베리파이에서 네트워크 스캔 결과 반환
         if mtype == 'wifi_scan':
-            nets = _scan_wifi_networks()
+            nets = _scan_wifi_networks_ext()
             # RSSI 내림차순 정렬 후 상위 15개만 반환
             try:
                 nets_sorted = sorted(nets, key=lambda n: n.get('rssi', -100), reverse=True)
@@ -416,34 +418,28 @@ class WifiRegisterChar(GattCharacteristic):
         
         # 네트워크 상태 조회
         elif mtype == 'get_network_status':
-            status = _get_network_status()
-            rsp = {"type": "get_network_status_result", "data": status, "timestamp": _now_ts()}
+            status = _get_network_status_ext()
+            rsp = {"type": "get_network_status_result", "data": status, "timestamp": _now_ts_ext()}
             payload = _json_bytes(rsp)
             # 청크 전송으로 변경
             self._notify_value(payload)
         
         # 네트워크 연결
         elif mtype == 'wifi_register':
-            def _now_ms() -> int:
-                return int(time.time() * 1000)
-
             payload_in = msg.get('data') or {}
-            ssid = str(payload_in.get('ssid', ''))
-            ok = True
-            message = 'connected' if ok else 'failed'
-
+            res = _wpa_connect_immediate_ext(payload_in, persist=False)
             rsp = {
                 "ver": int(msg.get('ver', 1)),
                 "id": msg.get('id') or "",
                 "type": "wifi_register_result",
-                "ts": _now_ms(),
+                "ts": _now_ms_ext(),
                 "data": {
-                    "ok": bool(ok),
-                    "message": message,
-                    "ssid": ssid
+                    "ok": bool(res.get('ok')),
+                    "message": res.get('message', ''),
+                    "ssid": res.get('ssid', str(payload_in.get('ssid', '')))
                 }
             }
-            self._notify_value(_json_bytes(rsp))
+            self._notify_value(_json_bytes_ext(rsp))
         else:
             rsp = {"type": "wifi_error", "data": {"success": False, "error": "unknown_type", "type": mtype}, "timestamp": _now_ts()}
             self._notify_value(_json_bytes(rsp))
