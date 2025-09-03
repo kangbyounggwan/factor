@@ -38,10 +38,6 @@ BLUEZ = 'org.bluez'
 GATT_MANAGER_IFACE = 'org.bluez.GattManager1'
 LE_ADV_MANAGER_IFACE = 'org.bluez.LEAdvertisingManager1'
 
-# Notify framing (ACK/RESULT 경계 식별용)
-FRAME_MAGIC = b'FCF1'          # 4 bytes
-FRAME_END = b'FCF1END'         # 7 bytes
-
 # 기본 GATT 객체 경로
 APP_PATH = '/org/factor/gatt'
 SERVICE_PATH = APP_PATH + '/service0'
@@ -50,16 +46,152 @@ EQUIP_CHAR_PATH = SERVICE_PATH + '/char1'
 ADV_PATH = '/org/factor/advertisement0'
 
 
-# NOTE: JSON 직렬화 유틸은 ble_service.utils 로 이동하여 사용 중
+def _json_bytes(obj: Dict[str, Any]) -> bytes:
+    try:
+        return json.dumps(obj, ensure_ascii=False).encode('utf-8', errors='ignore')
+    except Exception:
+        logging.getLogger('ble-gatt').exception("json dumps 실패")
+        return b'{}'
 
 
-# NOTE: now_ts 유틸은 ble_service.utils 로 이동하여 사용 중
+def _now_ts() -> int:
+    return int(time.time())
 
 
-# NOTE: Wi-Fi 스캔 로직은 ble_service.wifi 로 이동하여 사용 중
+def _scan_wifi_networks() -> List[Dict[str, Any]]:
+    """iwlist를 사용하여 주변 Wi-Fi 네트워크 스캔(ssid, rssi, security)"""
+    networks: List[Dict[str, Any]] = []
+    try:
+        result = subprocess.run(
+            ['sudo', 'iwlist', 'wlan0', 'scan'], capture_output=True, text=True, timeout=15
+        )
+        if result.returncode != 0:
+            return networks
+
+        current: Dict[str, Any] = {}
+        for raw in (result.stdout or '').split('\n'):
+            line = (raw or '').strip()
+            if not line:
+                continue
+            if line.startswith('Cell '):
+                if current.get('ssid'):
+                    networks.append(current)
+                current = {}
+                continue
+            if 'ESSID:' in line:
+                try:
+                    ssid = line.split('ESSID:', 1)[1].strip().strip('"')
+                    current['ssid'] = ssid
+                except Exception:
+                    logging.getLogger('ble-gatt').exception("Notify-chunk 프리뷰 로깅 실패")
+                continue
+            if 'Signal level=' in line:
+                try:
+                    import re as _re
+                    m = _re.search(r'Signal level=\s*(-?\d+)', line)
+                    if m:
+                        current['rssi'] = int(m.group(1))
+                except Exception:
+                    pass
+                continue
+            if 'Encryption key:' in line:
+                enc_on = 'on' in line.lower()
+                current.setdefault('_enc', enc_on)
+                continue
+            if ('WPA2' in line) or ('IEEE 802.11i' in line) or ('RSN' in line):
+                current['security'] = 'WPA2'
+                continue
+            if 'WPA' in line and 'WPA2' not in line:
+                current.setdefault('security', 'WPA')
+                continue
+            if 'WEP' in line:
+                current.setdefault('security', 'WEP')
+                continue
+
+        if current.get('ssid'):
+            networks.append(current)
+
+        for n in networks:
+            if 'security' not in n:
+                if n.get('_enc'):
+                    n['security'] = 'Protected'
+                else:
+                    n['security'] = 'Open'
+            if 'rssi' not in n:
+                n['rssi'] = -100
+            n.pop('_enc', None)
+        return networks
+    except Exception:
+        logging.getLogger('ble-gatt').exception("Wi-Fi 스캔 실패(iwlist)")
+        return networks
 
 
-# NOTE: 네트워크 상태 조회 로직은 ble_service.wifi 로 이동하여 사용 중
+def _get_network_status() -> Dict[str, Any]:
+    """현재 네트워크 상태 요약(wifi/ethernet) 반환.
+    - wifi: ssid, ip, gateway, connected
+    - ethernet: ip, gateway, connected
+    """
+    status: Dict[str, Any] = {
+        'wifi': {'interface': 'wlan0', 'connected': False, 'ssid': '', 'ip': '', 'gateway': ''},
+        'ethernet': {'interface': 'eth0', 'connected': False, 'ip': '', 'gateway': ''},
+    }
+
+    # 1) SSID 확인 (iwgetid)
+    try:
+        r = subprocess.run(['iwgetid', '-r'], capture_output=True, text=True, timeout=3)
+        if r.returncode == 0:
+            ssid = (r.stdout or '').strip()
+            if ssid:
+                status['wifi']['ssid'] = ssid
+                status['wifi']['connected'] = True
+    except Exception:
+        logging.getLogger('ble-gatt').exception("iwgetid 실행 실패")
+
+    # 2) IP 주소 확인 (psutil)
+    try:
+        import psutil  # type: ignore
+        addrs = psutil.net_if_addrs()
+        def _first_ipv4_addr(ifname: str) -> str:
+            for snic in addrs.get(ifname, []) or []:
+                if getattr(snic, 'family', None) == getattr(__import__('socket'), 'AF_INET', None):
+                    return snic.address or ''
+            return ''
+        status['wifi']['ip'] = _first_ipv4_addr('wlan0')
+        status['ethernet']['ip'] = _first_ipv4_addr('eth0')
+        if status['ethernet']['ip']:
+            status['ethernet']['connected'] = True
+    except Exception:
+        logging.getLogger('ble-gatt').exception("IP 주소 조회(psutil) 실패")
+
+    # 3) 기본 게이트웨이 확인 (ip route)
+    try:
+        r = subprocess.run(['ip', 'route', 'show', 'default'], capture_output=True, text=True, timeout=3)
+        line = (r.stdout or '').splitlines()[0] if (r.returncode == 0 and (r.stdout or '').strip()) else ''
+        # 예: "default via 192.168.0.1 dev wlan0 proto dhcp metric 600"
+        if line:
+            parts = line.split()
+            gw = ''
+            dev = ''
+            if 'via' in parts:
+                try:
+                    gw = parts[parts.index('via') + 1]
+                except Exception:
+                    logging.getLogger('ble-gatt').exception("기본 게이트웨이 파싱(via) 실패")
+                    gw = ''
+            if 'dev' in parts:
+                try:
+                    dev = parts[parts.index('dev') + 1]
+                except Exception:
+                    logging.getLogger('ble-gatt').exception("기본 게이트웨이 파싱(dev) 실패")
+                    dev = ''
+            if dev == 'wlan0':
+                status['wifi']['gateway'] = gw
+            elif dev == 'eth0':
+                status['ethernet']['gateway'] = gw
+    except Exception:
+        logging.getLogger('ble-gatt').exception("기본 게이트웨이 조회(ip route) 실패")
+
+    return status
 
 
 class GattService(ServiceInterface):
@@ -89,14 +221,6 @@ class GattCharacteristic(ServiceInterface):
         self.path = path
         self._value: bytes = b''
         self._notifying = False
-        # 직렬화 전송용 큐/워커 상태
-        try:
-            import asyncio as _asyncio  # noqa: F401
-            self._notify_queue = asyncio.Queue()
-        except Exception:
-            self._notify_queue = None  # type: ignore
-        self._notify_worker_running = False
-        self._notify_worker_task = None
 
     def _notify_value(self, value: bytes):
         self._value = value
@@ -188,14 +312,6 @@ class GattCharacteristic(ServiceInterface):
             self.emit_properties_changed({'Notifying': True}, [])
         except Exception:
             logging.getLogger('ble-gatt').exception("StartNotify PropertiesChanged 실패")
-        # 직렬화 워커 시작
-        try:
-            if isinstance(self._notify_queue, asyncio.Queue) and not self._notify_worker_running:
-                loop = asyncio.get_event_loop()
-                self._notify_worker_running = True
-                self._notify_worker_task = loop.create_task(self._notify_worker())
-        except Exception:
-            logging.getLogger('ble-gatt').exception("Notify 워커 시작 실패")
 
     @method()
     def StopNotify(self):
@@ -211,12 +327,6 @@ class GattCharacteristic(ServiceInterface):
             self.emit_properties_changed({'Notifying': False}, [])
         except Exception:
             logging.getLogger('ble-gatt').exception("StopNotify PropertiesChanged 실패")
-        # 직렬화 워커 중지
-        try:
-            self._notify_worker_running = False
-            self._notify_worker_task = None
-        except Exception:
-            logging.getLogger('ble-gatt').exception("Notify 워커 중지 실패")
 
     @method()
     def ReadValue(self, options: 'a{sv}') -> 'ay':  # type: ignore
@@ -226,81 +336,6 @@ class GattCharacteristic(ServiceInterface):
     def WriteValue(self, value: 'ay', options: 'a{sv}'):  # type: ignore
         # override
         pass
-
-    def _enqueue_notify(self, value: bytes) -> None:
-        """응답을 큐에 넣어 직렬화 전송."""
-        try:
-            if isinstance(self._notify_queue, asyncio.Queue):
-                self._notify_queue.put_nowait(value)
-            else:
-                # 폴백: 즉시 전송
-                self._notify_value(value)
-        except Exception:
-            logging.getLogger('ble-gatt').exception("enqueue 실패")
-
-    async def _notify_worker(self) -> None:
-        lg = logging.getLogger('ble-gatt')
-        try:
-            while self._notify_worker_running:
-                try:
-                    data: bytes = await self._notify_queue.get()  # type: ignore
-                except Exception:
-                    break
-                try:
-                    if not self._notifying:
-                        continue
-                    # 청크를 동기 순서로 전송
-                    lg.info(
-                        "Notify-serialized [%s] total_bytes=%d chunk_size=%d",
-                        self.uuid, len(data), MAX_CHUNK
-                    )
-                    for off in range(0, len(data), MAX_CHUNK):
-                        chunk = data[off:off + MAX_CHUNK]
-                        try:
-                            preview_text = chunk[:128].decode('utf-8', 'replace')
-                        except Exception:
-                            lg.exception("Notify-chunk 프리뷰 디코드 실패")
-                            preview_text = ''
-                        preview_hex = chunk[:32].hex()
-                        try:
-                            lg.info(
-                                "Notify-chunk [%s] off=%d len=%d/%d preview=%s hex=%s",
-                                self.uuid, off, len(chunk), len(data), preview_text, preview_hex
-                            )
-                        except Exception:
-                            lg.exception("Notify-chunk 프리뷰 로깅 실패")
-                        try:
-                            self.emit_properties_changed({'Value': bytes(chunk)}, [])
-                        except Exception:
-                            lg.exception(
-                                "Notify-chunk error [%s] off=%d len=%d/%d",
-                                self.uuid, off, len(chunk), len(data)
-                            )
-                        await asyncio.sleep(0.05)
-                finally:
-                    try:
-                        self._notify_queue.task_done()  # type: ignore
-                    except Exception:
-                        pass
-        except Exception:
-            lg.exception("Notify 워커 오류")
-
-    def _enqueue_framed(self, kind: str, payload: bytes) -> None:
-        """프레이밍된 메시지를 직렬화 큐에 넣어 전송.
-
-        - 헤더: FRAME_MAGIC(4B) + length(4B, big-endian) + kind(1B: 0x01=ACK, 0x02=RESULT)
-        - 바디: payload(JSON bytes)
-        - 종료: FRAME_END(7B)
-        """
-        try:
-            kind_flag = b'\x01' if kind == 'ack' else b'\x02'
-            length = len(payload).to_bytes(4, 'big')
-            header = FRAME_MAGIC + length + kind_flag
-            self._enqueue_notify(header)
-            self._enqueue_notify(payload)
-            self._enqueue_notify(FRAME_END)
-        except Exception:
-            logging.getLogger('ble-gatt').exception("프레이밍 전송 enqueue 실패")
 
 
 class ObjectManager(ServiceInterface):
@@ -327,7 +362,7 @@ class ObjectManager(ServiceInterface):
             'org.bluez.GattCharacteristic1': {
                 'UUID': Variant('s', WIFI_REGISTER_CHAR_UUID),
                 'Service': Variant('o', SERVICE_PATH),
-                'Flags': Variant('as', ['write', 'write-without-response', 'notify']),
+                'Flags': Variant('as', ['write', 'notify']),
                 'Value': Variant('ay', [])
             }
         }
@@ -335,7 +370,7 @@ class ObjectManager(ServiceInterface):
             'org.bluez.GattCharacteristic1': {
                 'UUID': Variant('s', EQUIPMENT_SETTINGS_CHAR_UUID),
                 'Service': Variant('o', SERVICE_PATH),
-                'Flags': Variant('as', ['write', 'write-without-response', 'notify']),
+                'Flags': Variant('as', ['write', 'notify']),
                 'Value': Variant('ay', [])
             }
         }
@@ -364,28 +399,12 @@ class WifiRegisterChar(GattCharacteristic):
         except Exception:
             logging.getLogger('ble-gatt').exception("WriteValue JSON 파싱 실패")
             rsp = {"type": "wifi_scan_result", "data": {"success": False, "error": "invalid_json"}, "timestamp": _now_ts()}
-            self._notify_value(_json_bytes_ext(rsp))
+            self._notify_value(_json_bytes(rsp))
             return
         
         
         # 라즈베리파이에서 네트워크 스캔 결과 반환
         if mtype == 'wifi_scan':
-            # 즉시 ACK
-            try:
-                ack = {
-                    "ver": int(msg.get('ver', 1)),
-                    "id": msg.get('id') or "",
-                    "type": "wifi_scan_ack",
-                    "ts": _now_ms_ext(),
-                }
-                # ACK 프레이밍 전송
-                self._enqueue_framed('ack', _json_bytes_ext(ack))
-            except Exception:
-                logging.getLogger('ble-gatt').exception("wifi_scan ACK 전송 실패")
-
-            # 결과는 ACK 송신 후 잠시 대기하여 직렬화
-            import time as _t
-            _t.sleep(0.2)
             nets = _scan_wifi_networks_ext()
             # RSSI 내림차순 정렬 후 상위 15개만 반환
             try:
@@ -395,53 +414,27 @@ class WifiRegisterChar(GattCharacteristic):
                 logging.getLogger('ble-gatt').exception("Wi-Fi 스캔 결과 정렬 실패")
                 nets_top = nets[:15]
             rsp = {"type": "wifi_scan_result", "data": nets_top, "timestamp": _now_ts()}
-            self._enqueue_framed('result', _json_bytes_ext(rsp))
+            self._notify_value(_json_bytes(rsp))
         
         # 네트워크 상태 조회
         elif mtype == 'get_network_status':
-            # 즉시 ACK
-            try:
-                ack = {
-                    "ver": int(msg.get('ver', 1)),
-                    "id": msg.get('id') or "",
-                    "type": "get_network_status_ack",
-                    "ts": _now_ms_ext(),
-                }
-                self._enqueue_framed('ack', _json_bytes_ext(ack))
-            except Exception:
-                logging.getLogger('ble-gatt').exception("get_network_status ACK 전송 실패")
-
-            # 결과는 ACK 송신 후 잠시 대기하여 직렬화
-            import time as _t
-            _t.sleep(0.2)
             status = _get_network_status_ext()
             rsp = {"type": "get_network_status_result", "data": status, "timestamp": _now_ts_ext()}
-            payload = _json_bytes_ext(rsp)
-            self._enqueue_framed('result', payload)
+            payload = _json_bytes(rsp)
+            # 청크 전송으로 변경
+            self._notify_value(payload)
         
         # 네트워크 연결
         elif mtype == 'wifi_register':
             payload_in = msg.get('data') or {}
-            # 즉시 ACK
-            try:
-                ack = {
-                    "ver": int(msg.get('ver', 1)),
-                    "id": msg.get('id') or "",
-                    "type": "wifi_register_ack",
-                    "ts": _now_ms_ext(),
-                }
-                self._enqueue_framed('ack', _json_bytes_ext(ack))
-            except Exception:
-                logging.getLogger('ble-gatt').exception("wifi_register ACK 전송 실패")
-
-            # 결과는 ACK 송신 후 잠시 대기하여 직렬화
-            import time as _t
-            _t.sleep(0.2)
+            # NetworkManager 활성 시 nmcli 우선, 아니면 wpa_cli 사용
             try:
                 use_nm = _nm_is_running_ext()
             except Exception:
                 use_nm = False
             res = _nm_connect_immediate_ext(payload_in) if use_nm else _wpa_connect_immediate_ext(payload_in, persist=False)
+
+            
             rsp = {
                 "ver": int(msg.get('ver', 1)),
                 "id": msg.get('id') or "",
@@ -453,15 +446,15 @@ class WifiRegisterChar(GattCharacteristic):
                     "ssid": res.get('ssid', str(payload_in.get('ssid', '')))
                 }
             }
-            self._enqueue_framed('result', _json_bytes_ext(rsp))
+            self._notify_value(_json_bytes_ext(rsp))
         else:
             rsp = {"type": "wifi_error", "data": {"success": False, "error": "unknown_type", "type": mtype}, "timestamp": _now_ts()}
-            self._notify_value(_json_bytes_ext(rsp))
+            self._notify_value(_json_bytes(rsp))
 
 
 class EquipmentSettingsChar(GattCharacteristic):
     def __init__(self):
-        super().__init__(EQUIPMENT_SETTINGS_CHAR_UUID, ['write','write-without-response', 'notify'], EQUIP_CHAR_PATH)
+        super().__init__(EQUIPMENT_SETTINGS_CHAR_UUID, ['write', 'notify'], EQUIP_CHAR_PATH)
         self._settings: Dict[str, Any] = {}
 
     @method()
@@ -486,7 +479,7 @@ class EquipmentSettingsChar(GattCharacteristic):
                 rsp = {"type": "equipment_error", "data": {"ok": False, "error": "unknown_type"}, "timestamp": _now_ts()}
         except Exception:
             rsp = {"type": "equipment_error", "data": {"ok": False, "error": "invalid_json"}, "timestamp": _now_ts()}
-        self._notify_value(_json_bytes_ext(rsp))
+        self._notify_value(_json_bytes(rsp))
 
 
 class NoIOAgent(ServiceInterface):
@@ -613,9 +606,9 @@ async def _async_run(logger: logging.Logger):
             "BLE GATT 구성 - service=%s, chars=[{%s:%s}, {%s:%s}]",
             SERVICE_UUID,
             WIFI_REGISTER_CHAR_UUID,
-            ','.join(['write','write-without-response', 'notify']),
+            ','.join(['write', 'notify']),
             EQUIPMENT_SETTINGS_CHAR_UUID,
-            ','.join(['write','write-without-response', 'notify'])
+            ','.join(['write', 'notify'])
         )
     except Exception:
         pass
