@@ -413,9 +413,8 @@ class WifiRegisterChar(GattCharacteristic):
             self._notify_value(_json_bytes(rsp))
         
         elif mtype == 'get_network_status':
-            # status = _get_network_status()
-            # rsp = {"type": "get_network_status_result", "data": status, "timestamp": _now_ts()}
-            rsp = {"type": "get_network_status_result", "data": "abc", "timestamp": _now_ts()}
+            status = _get_network_status()
+            rsp = {"type": "get_network_status_result", "data": status, "timestamp": _now_ts()}
             payload = _json_bytes(rsp)
             # 청크 전송으로 변경
             self._notify_value(payload)
