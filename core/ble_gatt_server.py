@@ -396,11 +396,21 @@ class WifiRegisterChar(GattCharacteristic):
                 nets_top = nets[:15]
             rsp = {"type": "wifi_scan_result", "data": nets_top, "timestamp": _now_ts()}
             self._notify_value(_json_bytes(rsp))
+        
         elif mtype == 'get_network_status':
             # status = _get_network_status()
             # rsp = {"type": "get_network_status_result", "data": status, "timestamp": _now_ts()}
             rsp = {"type": "get_network_status_result", "data": "abc", "timestamp": _now_ts()}
-            self._notify_value(_json_bytes(rsp))
+            payload = _json_bytes(rsp)
+            self._value = payload
+            if self._notifying:
+                try:
+                    self.emit_properties_changed({'Value': Variant('ay', bytes(payload))}, [])
+                except Exception:
+                    logging.getLogger('ble-gatt').exception(
+                        "Notify-full error [%s], bytes=%d", self.uuid, len(payload)
+                    )
+        
         elif mtype == 'wifi_register':
             ok = True
             rsp = {"type": "wifi_register_result", "data": {"ok": ok, "message": "applied"}, "timestamp": _now_ts()}
