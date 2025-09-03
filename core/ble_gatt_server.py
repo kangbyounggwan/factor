@@ -354,7 +354,7 @@ class ObjectManager(ServiceInterface):
             'org.bluez.GattCharacteristic1': {
                 'UUID': Variant('s', EQUIPMENT_SETTINGS_CHAR_UUID),
                 'Service': Variant('o', SERVICE_PATH),
-                'Flags': Variant('as', ['write', 'notify']),
+                'Flags': Variant('as', ['write', 'indicate']),
                 'Value': Variant('ay', [])
             }
         }
@@ -434,7 +434,7 @@ class WifiRegisterChar(GattCharacteristic):
 
 class EquipmentSettingsChar(GattCharacteristic):
     def __init__(self):
-        super().__init__(EQUIPMENT_SETTINGS_CHAR_UUID, ['write', 'notify'], EQUIP_CHAR_PATH)
+        super().__init__(EQUIPMENT_SETTINGS_CHAR_UUID, ['write', 'indicate'], EQUIP_CHAR_PATH)
         self._settings: Dict[str, Any] = {}
 
     @method()
@@ -587,7 +587,7 @@ async def _async_run(logger: logging.Logger):
             WIFI_REGISTER_CHAR_UUID,
             ','.join(['write', 'indicate']),
             EQUIPMENT_SETTINGS_CHAR_UUID,
-            ','.join(['write', 'notify'])
+            ','.join(['write', 'indicate'])
         )
     except Exception:
         pass
