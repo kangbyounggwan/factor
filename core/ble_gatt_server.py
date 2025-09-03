@@ -355,7 +355,7 @@ class ObjectManager(ServiceInterface):
             'org.bluez.GattCharacteristic1': {
                 'UUID': Variant('s', WIFI_REGISTER_CHAR_UUID),
                 'Service': Variant('o', SERVICE_PATH),
-                'Flags': Variant('as', ['write', 'notify']),
+                'Flags': Variant('as', ['write', 'indicate']),
                 'Value': Variant('ay', [])
             }
         }
@@ -371,10 +371,11 @@ class ObjectManager(ServiceInterface):
 
 class WifiRegisterChar(GattCharacteristic):
     def __init__(self):
-        super().__init__(WIFI_REGISTER_CHAR_UUID, ['write', 'notify'], WIFI_CHAR_PATH)
+        super().__init__(WIFI_REGISTER_CHAR_UUID, ['write', 'indicate'], WIFI_CHAR_PATH)
+        self._pending_status_acks: Dict[str, float] = {}
 
-    @method()
-    def WriteValue(self, value: 'ay', options: 'a{sv}'):
+    @method(in_signature='aya{sv}')
+    def WriteValue(self, value, options):
         raw = bytes(value)
         # 요청(Write) 프리뷰 로깅
         try:
@@ -405,9 +406,32 @@ class WifiRegisterChar(GattCharacteristic):
             rsp = {"type": "wifi_scan_result", "data": nets_top, "timestamp": _now_ts()}
             self._notify_value(_json_bytes(rsp))
         elif mtype == 'get_network_status':
+            import uuid as _uuid, time as _time, asyncio as _asyncio
             status = _get_network_status()
-            rsp = {"type": "get_network_status_result", "data": status, "timestamp": _now_ts()}
+            op_id = str(_uuid.uuid4())[:8]
+            # ACK 대기 등록
+            self._pending_status_acks[op_id] = _time.time()
+            rsp = {"type": "get_network_status_result", "op_id": op_id, "data": status, "timestamp": _now_ts()}
             self._notify_value(_json_bytes(rsp))
+
+            async def _await_status_ack(op: str, timeout_s: float = 5.0):
+                try:
+                    await _asyncio.sleep(timeout_s)
+                    if op in self._pending_status_acks:
+                        self._pending_status_acks.pop(op, None)
+                        logging.getLogger('ble-gatt').warning("WiFiStatus ACK 타임아웃 op_id=%s", op)
+                except Exception:
+                    pass
+
+            try:
+                _asyncio.get_event_loop().create_task(_await_status_ack(op_id))
+            except Exception:
+                pass
+        elif mtype == 'get_network_status_ack':
+            op_id = str((msg.get('op_id') or '')).strip()
+            if op_id:
+                had = self._pending_status_acks.pop(op_id, None) is not None
+                logging.getLogger('ble-gatt').info("WiFiStatus ACK 수신 op_id=%s pending=%s", op_id, had)
         elif mtype == 'wifi_register':
             ok = True
             rsp = {"type": "wifi_register_result", "data": {"ok": ok, "message": "applied"}, "timestamp": _now_ts()}
@@ -422,8 +446,8 @@ class EquipmentSettingsChar(GattCharacteristic):
         super().__init__(EQUIPMENT_SETTINGS_CHAR_UUID, ['write', 'notify'], EQUIP_CHAR_PATH)
         self._settings: Dict[str, Any] = {}
 
-    @method()
-    def WriteValue(self, value: 'ay', options: 'a{sv}'):
+    @method(in_signature='aya{sv}')
+    def WriteValue(self, value, options):
         raw = bytes(value)
         # 요청(Write) 프리뷰 로깅
         try:
@@ -570,7 +594,7 @@ async def _async_run(logger: logging.Logger):
             "BLE GATT 구성 - service=%s, chars=[{%s:%s}, {%s:%s}]",
             SERVICE_UUID,
             WIFI_REGISTER_CHAR_UUID,
-            ','.join(['write', 'notify']),
+            ','.join(['write', 'indicate']),
             EQUIPMENT_SETTINGS_CHAR_UUID,
             ','.join(['write', 'notify'])
         )
