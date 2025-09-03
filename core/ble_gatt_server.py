@@ -327,7 +327,7 @@ class ObjectManager(ServiceInterface):
             'org.bluez.GattCharacteristic1': {
                 'UUID': Variant('s', WIFI_REGISTER_CHAR_UUID),
                 'Service': Variant('o', SERVICE_PATH),
-                'Flags': Variant('as', ['write', 'notify']),
+                'Flags': Variant('as', ['write', 'write-without-response', 'notify']),
                 'Value': Variant('ay', [])
             }
         }
@@ -335,7 +335,7 @@ class ObjectManager(ServiceInterface):
             'org.bluez.GattCharacteristic1': {
                 'UUID': Variant('s', EQUIPMENT_SETTINGS_CHAR_UUID),
                 'Service': Variant('o', SERVICE_PATH),
-                'Flags': Variant('as', ['write', 'notify']),
+                'Flags': Variant('as', ['write', 'write-without-response', 'notify']),
                 'Value': Variant('ay', [])
             }
         }
@@ -461,7 +461,7 @@ class WifiRegisterChar(GattCharacteristic):
 
 class EquipmentSettingsChar(GattCharacteristic):
     def __init__(self):
-        super().__init__(EQUIPMENT_SETTINGS_CHAR_UUID, ['write', 'notify'], EQUIP_CHAR_PATH)
+        super().__init__(EQUIPMENT_SETTINGS_CHAR_UUID, ['write','write-without-response', 'notify'], EQUIP_CHAR_PATH)
         self._settings: Dict[str, Any] = {}
 
     @method()
@@ -613,9 +613,9 @@ async def _async_run(logger: logging.Logger):
             "BLE GATT 구성 - service=%s, chars=[{%s:%s}, {%s:%s}]",
             SERVICE_UUID,
             WIFI_REGISTER_CHAR_UUID,
-            ','.join(['write', 'notify']),
+            ','.join(['write','write-without-response', 'notify']),
             EQUIPMENT_SETTINGS_CHAR_UUID,
-            ','.join(['write', 'notify'])
+            ','.join(['write','write-without-response', 'notify'])
         )
     except Exception:
         pass
