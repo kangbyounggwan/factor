@@ -122,7 +122,7 @@ create_user() {
     fi
     
     # 필요한 그룹에 추가 (bluetooth 포함)
-    usermod -a -G i2c,spi,gpio,dialout,bluetooth factor 2>/dev/null || true
+    usermod -a -G i2c,spi,gpio,dialout,bluetooth,netdev factor 2>/dev/null || true
 }
 
 # 디렉토리 생성
@@ -269,6 +269,29 @@ setup_service() {
     log_step "서비스 등록 및 시작..."
     
     # systemd 데몬 리로드
+    systemctl daemon-reload
+    
+    # factor-client 재시작 시 wpa_supplicant, dhcpcd도 함께 재시작되도록 연동 드롭인 생성
+    mkdir -p /etc/systemd/system/factor-client.service.d
+    cat > /etc/systemd/system/factor-client.service.d/10-wants-after.conf << 'EOF'
+[Unit]
+Wants=wpa_supplicant.service dhcpcd.service
+After=wpa_supplicant.service dhcpcd.service
+EOF
+
+    mkdir -p /etc/systemd/system/wpa_supplicant.service.d
+    cat > /etc/systemd/system/wpa_supplicant.service.d/10-factor-partof.conf << 'EOF'
+[Unit]
+PartOf=factor-client.service
+EOF
+
+    mkdir -p /etc/systemd/system/dhcpcd.service.d
+    cat > /etc/systemd/system/dhcpcd.service.d/10-factor-partof.conf << 'EOF'
+[Unit]
+PartOf=factor-client.service
+EOF
+
+    # 드롭인 적용을 위해 재로드
     systemctl daemon-reload
     
     # 서비스 활성화

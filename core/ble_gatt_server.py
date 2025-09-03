@@ -17,7 +17,7 @@ import logging
 import subprocess
 from typing import Any, Dict, List
 from core.ble_service.utils import json_bytes as _json_bytes_ext, now_ts as _now_ts_ext, now_ms as _now_ms_ext
-from core.ble_service.wifi import scan_wifi_networks as _scan_wifi_networks_ext, get_network_status as _get_network_status_ext, wpa_connect_immediate as _wpa_connect_immediate_ext
+from core.ble_service.wifi import scan_wifi_networks as _scan_wifi_networks_ext, get_network_status as _get_network_status_ext, wpa_connect_immediate as _wpa_connect_immediate_ext, nm_connect_immediate as _nm_connect_immediate_ext, _nm_is_running as _nm_is_running_ext
 
 from dbus_next.aio import MessageBus
 from dbus_next.service import ServiceInterface, method, dbus_property
@@ -427,7 +427,12 @@ class WifiRegisterChar(GattCharacteristic):
         # 네트워크 연결
         elif mtype == 'wifi_register':
             payload_in = msg.get('data') or {}
-            res = _wpa_connect_immediate_ext(payload_in, persist=False)
+            # NetworkManager 활성 시 nmcli 우선, 아니면 wpa_cli 사용
+            try:
+                use_nm = _nm_is_running_ext()
+            except Exception:
+                use_nm = False
+            res = _nm_connect_immediate_ext(payload_in) if use_nm else _wpa_connect_immediate_ext(payload_in, persist=False)
 
             
             rsp = {

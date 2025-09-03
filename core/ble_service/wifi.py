@@ -132,6 +132,17 @@ def get_network_status() -> Dict[str, Any]:
     return status
 
 
+def _nm_is_running() -> bool:
+    """NetworkManager 실행 여부 확인."""
+    try:
+        r = subprocess.run(['nmcli', '-t', '-f', 'RUNNING', 'general', 'status'],
+                           capture_output=True, text=True, timeout=3)
+        return r.returncode == 0 and (r.stdout or '').strip().lower() == 'running'
+    except Exception:
+        logging.getLogger('ble-gatt').exception("NetworkManager 상태 확인 실패")
+        return False
+
+
 def wpa_connect_immediate(data: Dict[str, Any], persist: bool = False) -> Dict[str, Any]:
     """wpa_cli를 사용해 설정 파일 저장 없이 즉시 Wi‑Fi 연결 시도.
 
@@ -182,6 +193,7 @@ def wpa_connect_immediate(data: Dict[str, Any], persist: bool = False) -> Dict[s
 
         if security == 'OPEN':
             set_net('key_mgmt', 'NONE')
+            
         elif security == 'WPA3':
             if len(password) < 8:
                 return {"ok": False, "message": "WPA3 password length < 8", "ssid": ssid}
@@ -212,6 +224,44 @@ def wpa_connect_immediate(data: Dict[str, Any], persist: bool = False) -> Dict[s
         return {"ok": False, "message": "apply_done_but_not_connected", "ssid": ssid, "error": res.get('error')}
     except Exception:
         logging.getLogger('ble-gatt').exception("wpa_cli 즉시 연결 실패")
+        return {"ok": False, "message": "exception", "ssid": ssid}
+
+
+
+def nm_connect_immediate(data: Dict[str, Any]) -> Dict[str, Any]:
+    """NetworkManager(nmcli)로 즉시 Wi‑Fi 연결.
+
+    - 입력 data: {ssid, password, hidden}
+    - 성공: {ok: True, message: 'connected', ssid}
+    - 실패: {ok: False, message: str, ssid}
+    """
+    lg = logging.getLogger('ble-gatt')
+    ssid = str(data.get('ssid', '')).strip()
+    password = str(data.get('password') or '')
+    hidden = bool(data.get('hidden', False))
+    if not ssid:
+        return {"ok": False, "message": "ssid required"}
+
+    try:
+        lg.info("nm_connect_immediate start ssid=%s hidden=%s", ssid, hidden)
+        cmd = ['nmcli', '-w', '20', 'dev', 'wifi', 'connect', ssid, 'ifname', 'wlan0']
+        if password:
+            cmd += ['password', password]
+        if hidden:
+            cmd += ['hidden', 'yes']
+        lg.info("nmcli exec: %s", ' '.join(cmd))
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        lg.info("nmcli rc=%s out=%s err=%s", r.returncode, (r.stdout or '').strip(), (r.stderr or '').strip())
+        if r.returncode != 0:
+            return {"ok": False, "message": f"nmcli failed: {r.stdout or r.stderr}", "ssid": ssid}
+        lg.info("wait_wifi_connected start timeout=25s")
+        res = wait_wifi_connected(timeout_sec=25)
+        lg.info("wait_wifi_connected result: %s", res)
+        if res.get('ok'):
+            return {"ok": True, "message": "connected", "ssid": ssid}
+        return {"ok": False, "message": "apply_done_but_not_connected", "ssid": ssid, "error": res.get('error')}
+    except Exception:
+        lg.exception("nmcli 즉시 연결 실패")
         return {"ok": False, "message": "exception", "ssid": ssid}
 
 
