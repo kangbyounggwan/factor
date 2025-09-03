@@ -397,8 +397,9 @@ class WifiRegisterChar(GattCharacteristic):
             rsp = {"type": "wifi_scan_result", "data": nets_top, "timestamp": _now_ts()}
             self._notify_value(_json_bytes(rsp))
         elif mtype == 'get_network_status':
-            status = _get_network_status()
-            rsp = {"type": "get_network_status_result", "data": status, "timestamp": _now_ts()}
+            # status = _get_network_status()
+            # rsp = {"type": "get_network_status_result", "data": status, "timestamp": _now_ts()}
+            rsp = {"type": "get_network_status_result", "data": "abc", "timestamp": _now_ts()}
             self._notify_value(_json_bytes(rsp))
         elif mtype == 'wifi_register':
             ok = True
