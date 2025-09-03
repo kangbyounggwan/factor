@@ -355,7 +355,7 @@ class ObjectManager(ServiceInterface):
             'org.bluez.GattCharacteristic1': {
                 'UUID': Variant('s', WIFI_REGISTER_CHAR_UUID),
                 'Service': Variant('o', SERVICE_PATH),
-                'Flags': Variant('as', ['write', 'indicate']),
+                'Flags': Variant('as', ['write', 'notify']),
                 'Value': Variant('ay', [])
             }
         }
@@ -371,7 +371,7 @@ class ObjectManager(ServiceInterface):
 
 class WifiRegisterChar(GattCharacteristic):
     def __init__(self):
-        super().__init__(WIFI_REGISTER_CHAR_UUID, ['write', 'indicate'], WIFI_CHAR_PATH)
+        super().__init__(WIFI_REGISTER_CHAR_UUID, ['write', 'notify'], WIFI_CHAR_PATH)
 
     @method()
     def WriteValue(self, value: 'ay', options: 'a{sv}'):
@@ -570,7 +570,7 @@ async def _async_run(logger: logging.Logger):
             "BLE GATT 구성 - service=%s, chars=[{%s:%s}, {%s:%s}]",
             SERVICE_UUID,
             WIFI_REGISTER_CHAR_UUID,
-            ','.join(['write', 'indicate']),
+            ','.join(['write', 'notify']),
             EQUIPMENT_SETTINGS_CHAR_UUID,
             ','.join(['write', 'notify'])
         )
