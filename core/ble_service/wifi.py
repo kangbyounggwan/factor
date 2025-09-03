@@ -268,3 +268,28 @@ def nm_connect_immediate(data: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "message": "exception", "ssid": ssid}
 
 
+
+# 와이파이 연결을 시도하고 지연시간내에 연결되면 연결 확인을 알려줌줌
+def wait_wifi_connected(timeout_sec: int = 25) -> Dict[str, Any]:
+    """지정 시간 동안 Wi‑Fi 연결 완료 대기.
+
+    - 입력: timeout_sec(초)
+    - 성공: {ok: True, status: get_network_status() 결과}
+    - 실패: {ok: False, error: str}
+    """
+    t0 = time.time()
+    last_err = ''
+    while time.time() - t0 < timeout_sec:
+        try:
+            r = subprocess.run(['iwgetid', '-r'], capture_output=True, text=True, timeout=3)
+            ssid = (r.stdout or '').strip() if r.returncode == 0 else ''
+            if ssid:
+                st = get_network_status()
+                st['wifi']['ssid'] = ssid
+                st['wifi']['connected'] = True
+                return {'ok': True, 'status': st}
+        except Exception as e:
+            logging.getLogger('ble-gatt').exception("즉시 연결 확인 실패(iwgetid)")
+            last_err = str(e)
+        time.sleep(1.0)
+    return {'ok': False, 'error': last_err or 'timeout'}
