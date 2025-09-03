@@ -23,6 +23,10 @@ from dbus_next.constants import PropertyAccess
 from dbus_next import Variant, BusType
 
 
+# D-Bus 타입 문자열 상수 (dbus-next @method 주석용)
+DBUS_AY = 'ay'
+DBUS_A_SV = 'a{sv}'
+
 # ===== 고정 UUID =====
 SERVICE_UUID = "12345678-1234-1234-1234-123456789abc"
 WIFI_REGISTER_CHAR_UUID = "87654321-4321-4321-4321-cba987654321"
@@ -370,9 +374,7 @@ class WifiRegisterChar(GattCharacteristic):
         super().__init__(WIFI_REGISTER_CHAR_UUID, ['write', 'indicate'], WIFI_CHAR_PATH)
 
     @method()
-    def WriteValue(self, value: 'ay', options: 'a{sv}'):  # noqa
-    @method()
-    def WriteValue(self, value: 'ay', options: 'a{sv}'):  # noqa
+    def WriteValue(self, value: 'ay', options: 'a{sv}'):
         raw = bytes(value)
         # 요청(Write) 프리뷰 로깅
         try:
