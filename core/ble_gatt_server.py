@@ -307,7 +307,7 @@ class GattCharacteristic(ServiceInterface):
             logging.getLogger('ble-gatt').exception("StartNotify 로깅 실패")
         # Notifying=True 상태 변경 브로드캐스트
         try:
-            self.emit_properties_changed({'Notifying': Variant('b', True)}, [])
+            self.emit_properties_changed({'Notifying': True}, [])
         except Exception:
             logging.getLogger('ble-gatt').exception("StartNotify PropertiesChanged 실패")
 
@@ -322,7 +322,7 @@ class GattCharacteristic(ServiceInterface):
             logging.getLogger('ble-gatt').exception("StopNotify 로깅 실패")
         # Notifying=False 상태 변경 브로드캐스트
         try:
-            self.emit_properties_changed({'Notifying': Variant('b', False)}, [])
+            self.emit_properties_changed({'Notifying': False}, [])
         except Exception:
             logging.getLogger('ble-gatt').exception("StopNotify PropertiesChanged 실패")
 
