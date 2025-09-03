@@ -22,11 +22,6 @@ from dbus_next.service import ServiceInterface, method, dbus_property
 from dbus_next.constants import PropertyAccess
 from dbus_next import Variant, BusType
 
-
-# D-Bus 타입 문자열 상수 (dbus-next @method 주석용)
-DBUS_AY = 'ay'
-DBUS_A_SV = 'a{sv}'
-
 # ===== 고정 UUID =====
 SERVICE_UUID = "12345678-1234-1234-1234-123456789abc"
 WIFI_REGISTER_CHAR_UUID = "87654321-4321-4321-4321-cba987654321"
@@ -222,14 +217,10 @@ class GattCharacteristic(ServiceInterface):
 
     def _notify_value(self, value: bytes):
         self._value = value
-        # 실제 전송 방식 라벨(Indicate/Notify) 결정 후 로깅
-        try:
-            label = "Indicate" if ('indicate' in (self.flags or [])) and ('notify' not in (self.flags or [])) else "Notify"
-        except Exception:
-            label = "Notify"
+        # 전체 본문은 전송하지 않고, 청크만 전송/로깅
         logging.getLogger('ble-gatt').info(
-            "%s-begin [%s] total_bytes=%d chunk_size=%d",
-            label, self.uuid, len(value), MAX_CHUNK
+            "Notify-begin [%s] total_bytes=%d chunk_size=%d",
+            self.uuid, len(value), MAX_CHUNK
         )
         if not self._notifying:
             return
@@ -248,8 +239,8 @@ class GattCharacteristic(ServiceInterface):
                 preview_hex = chunk[:32].hex()
                 try:
                     logging.getLogger('ble-gatt').info(
-                        "%s-chunk [%s] off=%d len=%d/%d preview=%s hex=%s",
-                        label, self.uuid, off, len(chunk), len(data), preview_text, preview_hex
+                        "Notify-chunk [%s] off=%d len=%d/%d preview=%s hex=%s",
+                        self.uuid, off, len(chunk), len(data), preview_text, preview_hex
                     )
                 except Exception:
                     pass
@@ -374,8 +365,8 @@ class WifiRegisterChar(GattCharacteristic):
         super().__init__(WIFI_REGISTER_CHAR_UUID, ['write', 'indicate'], WIFI_CHAR_PATH)
         self._pending_status_acks: Dict[str, float] = {}
 
-    @method(in_signature='aya{sv}')
-    def WriteValue(self, value, options):
+    @method()
+    def WriteValue(self, value: 'ay', options: 'a{sv}'):
         raw = bytes(value)
         # 요청(Write) 프리뷰 로깅
         try:
@@ -446,8 +437,8 @@ class EquipmentSettingsChar(GattCharacteristic):
         super().__init__(EQUIPMENT_SETTINGS_CHAR_UUID, ['write', 'notify'], EQUIP_CHAR_PATH)
         self._settings: Dict[str, Any] = {}
 
-    @method(in_signature='aya{sv}')
-    def WriteValue(self, value, options):
+    @method()
+    def WriteValue(self, value: 'ay', options: 'a{sv}'):
         raw = bytes(value)
         # 요청(Write) 프리뷰 로깅
         try:
