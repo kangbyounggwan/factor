@@ -161,7 +161,9 @@ def wpa_connect_immediate(data: Dict[str, Any], persist: bool = False) -> Dict[s
         return {"ok": False, "message": "ssid required"}
 
     def run(args: List[str], timeout: int = 5) -> subprocess.CompletedProcess:
-        return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        # 권한 문제 방지를 위해 sudo로 실행
+        cmd = ['sudo'] + args
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
 
     try:
         lg = logging.getLogger('ble-gatt')
@@ -244,7 +246,8 @@ def nm_connect_immediate(data: Dict[str, Any]) -> Dict[str, Any]:
 
     try:
         lg.info("nm_connect_immediate start ssid=%s hidden=%s", ssid, hidden)
-        cmd = ['nmcli', '-w', '20', 'dev', 'wifi', 'connect', ssid, 'ifname', 'wlan0']
+        # 권한 문제 방지를 위해 sudo로 실행 (install.sh에서 sudoers 규칙 추가 필요)
+        cmd = ['sudo', 'nmcli', '-w', '20', 'dev', 'wifi', 'connect', ssid, 'ifname', 'wlan0']
         if password:
             cmd += ['password', password]
         if hidden:

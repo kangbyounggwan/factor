@@ -446,6 +446,17 @@ EOF
     fi
 
     log_info "Polkit 규칙 적용 완료: factor 사용자에 NetworkManager 제어 허용"
+
+    # sudoers에 nmcli 무비번 허용 규칙 추가
+    if command -v nmcli >/dev/null 2>&1; then
+        NMCLI_BIN=$(command -v nmcli)
+        cat > /etc/sudoers.d/factor-nmcli << EOF
+factor ALL=(root) NOPASSWD: $NMCLI_BIN
+Defaults!$NMCLI_BIN !requiretty
+EOF
+        chmod 440 /etc/sudoers.d/factor-nmcli
+        log_info "sudoers에 nmcli 무비번 허용 규칙 추가"
+    fi
 }
 
 # (제거됨) 블루투스 자동 설정 oneshot 서비스 설치
