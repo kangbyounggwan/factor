@@ -109,34 +109,82 @@ def get_printer_info() -> Dict[str, Any]:
                                 if response:
                                     responses.append(response)
                             
-                            # 응답 파싱
+                            # 응답 파싱 - 각 라인별로 정확히 처리
+                            import re
+                            
+                            # 각 응답 라인을 개별적으로 처리
                             for response in responses:
-                                if response.startswith("FIRMWARE_NAME:"):
-                                    # FIRMWARE_NAME: Marlin 2.1.2.1 (GitHub) (Creality Ender-3 V3 SE)
-                                    firmware_info = response.replace("FIRMWARE_NAME:", "").strip()
+                                response = response.strip()
+                                if not response:
+                                    continue
+                                
+                                # FIRMWARE_NAME 추출
+                                if response.startswith('FIRMWARE_NAME:'):
+                                    firmware_info = response.replace('FIRMWARE_NAME:', '').strip()
                                     printer_info["firmware"] = firmware_info
-                                    
-                                    # 모델명 추출 시도
-                                    if "Ender-3 V3 SE" in firmware_info:
+                                
+                                # MACHINE_TYPE 추출 (가장 정확한 모델명)
+                                elif response.startswith('MACHINE_TYPE:'):
+                                    machine_type = response.replace('MACHINE_TYPE:', '').strip()
+                                    printer_info["model"] = machine_type
+                                
+                                # UUID 추출
+                                elif response.startswith('UUID:'):
+                                    uuid = response.replace('UUID:', '').strip()
+                                    printer_info["uuid"] = uuid
+                                
+                                # PROTOCOL_VERSION 추출
+                                elif response.startswith('PROTOCOL_VERSION:'):
+                                    protocol = response.replace('PROTOCOL_VERSION:', '').strip()
+                                    printer_info["protocol_version"] = protocol
+                                
+                                # EXTRUDER_COUNT 추출
+                                elif response.startswith('EXTRUDER_COUNT:'):
+                                    extruder_count = response.replace('EXTRUDER_COUNT:', '').strip()
+                                    try:
+                                        printer_info["extruder_count"] = int(extruder_count)
+                                    except ValueError:
+                                        pass
+                                
+                                # SOURCE_CODE_URL 추출
+                                elif response.startswith('SOURCE_CODE_URL:'):
+                                    source_url = response.replace('SOURCE_CODE_URL:', '').strip()
+                                    printer_info["source_code_url"] = source_url
+                            
+                            # MACHINE_TYPE이 없으면 FIRMWARE_NAME에서 모델명 추출 시도
+                            if not printer_info.get("model") or printer_info["model"] == "Unknown":
+                                if printer_info.get("firmware"):
+                                    if "Ender-3 V3 SE" in printer_info["firmware"]:
                                         printer_info["model"] = "Creality Ender-3 V3 SE"
-                                    elif "Ender-3" in firmware_info:
+                                    elif "Ender-3 V2 Neo" in printer_info["firmware"]:
+                                        printer_info["model"] = "Creality Ender-3 V2 Neo"
+                                    elif "Ender-3" in printer_info["firmware"]:
                                         printer_info["model"] = "Creality Ender-3"
-                                    elif "Ender-5" in firmware_info:
+                                    elif "Ender-5" in printer_info["firmware"]:
                                         printer_info["model"] = "Creality Ender-5"
-                                    elif "Prusa" in firmware_info:
+                                    elif "Prusa" in printer_info["firmware"]:
                                         printer_info["model"] = "Prusa i3"
-                                    elif "Ultimaker" in firmware_info:
+                                    elif "Ultimaker" in printer_info["firmware"]:
                                         printer_info["model"] = "Ultimaker"
                                     else:
                                         printer_info["model"] = "Unknown 3D Printer"
-                                    break
-                                elif "Klipper" in response:
+                            
+                            # 기존 펌웨어 타입 확인 (Klipper, RepRapFirmware 등)
+                            for response in responses:
+                                if "Klipper" in response:
                                     printer_info["firmware"] = "Klipper"
-                                    printer_info["model"] = "Klipper-based Printer"
+                                    if not printer_info.get("model") or printer_info["model"] == "Unknown 3D Printer":
+                                        printer_info["model"] = "Klipper-based Printer"
                                     break
                                 elif "RepRapFirmware" in response:
                                     printer_info["firmware"] = "RepRapFirmware"
-                                    printer_info["model"] = "RepRap-based Printer"
+                                    if not printer_info.get("model") or printer_info["model"] == "Unknown 3D Printer":
+                                        printer_info["model"] = "RepRap-based Printer"
+                                    break
+                                elif "Marlin" in response:
+                                    printer_info["firmware"] = "Marlin"
+                                    if not printer_info.get("model") or printer_info["model"] == "Unknown 3D Printer":
+                                        printer_info["model"] = "RepRap-based Printer"
                                     break
                             
                             # 설정 파일에서 모델 정보 확인
