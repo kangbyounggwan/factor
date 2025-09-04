@@ -70,6 +70,12 @@ class FactorClient:
         self.last_heartbeat = time.time()
         self.connected = False
         
+        # 각 명령별 마지막 응답 시간 추적
+        self.last_temperature_response = time.time()  # M105 응답
+        self.last_position_response = time.time()    # M114 응답
+        self.last_gcode_response = time.time()       # G-code 응답
+        self.last_state_response = time.time()       # 상태 변경
+        
         # 스레드 및 큐
         self.data_queue = Queue()
         self.worker_threads = []
@@ -289,6 +295,29 @@ class FactorClient:
                         self.logger.error(f"  - 현재 시간: {datetime.fromtimestamp(current_time)}")
                         self.logger.error(f"  - 마지막 하트비트 시간: {datetime.fromtimestamp(self.last_heartbeat)}")
                         
+                        # 각 명령별 응답 시간 분석
+                        temp_time_since = current_time - self.last_temperature_response
+                        pos_time_since = current_time - self.last_position_response
+                        gcode_time_since = current_time - self.last_gcode_response
+                        state_time_since = current_time - self.last_state_response
+                        
+                        self.logger.error(f"  - 명령별 응답 상태:")
+                        self.logger.error(f"    * M105 (온도): {temp_time_since:.1f}초 전")
+                        self.logger.error(f"    * M114 (위치): {pos_time_since:.1f}초 전")
+                        self.logger.error(f"    * G-code: {gcode_time_since:.1f}초 전")
+                        self.logger.error(f"    * 상태 변경: {state_time_since:.1f}초 전")
+                        
+                        # 가장 오래된 응답 찾기
+                        oldest_response = min(temp_time_since, pos_time_since, gcode_time_since, state_time_since)
+                        if oldest_response == temp_time_since:
+                            self.logger.error(f"  - 하트비트 타임아웃 원인: M105 (온도) 명령에 응답하지 않음")
+                        elif oldest_response == pos_time_since:
+                            self.logger.error(f"  - 하트비트 타임아웃 원인: M114 (위치) 명령에 응답하지 않음")
+                        elif oldest_response == gcode_time_since:
+                            self.logger.error(f"  - 하트비트 타임아웃 원인: G-code 명령에 응답하지 않음")
+                        else:
+                            self.logger.error(f"  - 하트비트 타임아웃 원인: 프린터 상태 변경에 응답하지 않음")
+                        
                         # 프린터 연결 상태 상세 정보
                         if self.printer_comm:
                             self.logger.error(f"  - 프린터 통신 상태: {self.printer_comm.connected}")
@@ -447,11 +476,13 @@ class FactorClient:
         
         self.printer_status = status
         self.last_heartbeat = time.time()
+        self.last_state_response = time.time()  # 상태 변경 응답 시간 업데이트
         
         # 하트비트 업데이트 상세 로깅
-        self.logger.debug(f"하트비트 업데이트 - 프린터 상태 변경: {old_state_name} → {status.state}")
-        self.logger.debug(f"  - 하트비트 시간: {datetime.fromtimestamp(self.last_heartbeat)}")
-        self.logger.debug(f"  - 상태 플래그: {status.flags}")
+        self.logger.info(f"하트비트 업데이트 - 프린터 상태 변경: {old_state_name} → {status.state}")
+        self.logger.info(f"  - 하트비트 시간: {datetime.fromtimestamp(self.last_heartbeat)}")
+        self.logger.info(f"  - 상태 플래그: {status.flags}")
+        self.logger.info(f"  - 트리거: 프린터 상태 변경 콜백")
         
         self._trigger_callback('on_printer_state_change', status)
         self.logger.info(f"프린터 상태 변경: {status.state}")
@@ -460,7 +491,13 @@ class FactorClient:
         """온도 업데이트 콜백"""
         # 온도 업데이트 시에도 하트비트 업데이트
         self.last_heartbeat = time.time()
-        self.logger.debug(f"하트비트 업데이트 - 온도 업데이트")
+        self.last_temperature_response = time.time()  # M105 응답 시간 업데이트
+        
+        # 하트비트 업데이트 상세 로깅
+        self.logger.info(f"하트비트 업데이트 - 온도 업데이트")
+        self.logger.info(f"  - 하트비트 시간: {datetime.fromtimestamp(self.last_heartbeat)}")
+        self.logger.info(f"  - 온도 정보: {temp_info}")
+        self.logger.info(f"  - 트리거: 온도 업데이트 콜백 (M105 응답)")
         
         self._trigger_callback('on_temperature_update', temp_info)
         self.logger.debug(f"온도 업데이트: {temp_info}")
@@ -469,7 +506,13 @@ class FactorClient:
         """위치 업데이트 콜백"""
         # 위치 업데이트 시에도 하트비트 업데이트
         self.last_heartbeat = time.time()
-        self.logger.debug(f"하트비트 업데이트 - 위치 업데이트")
+        self.last_position_response = time.time()  # M114 응답 시간 업데이트
+        
+        # 하트비트 업데이트 상세 로깅
+        self.logger.info(f"하트비트 업데이트 - 위치 업데이트")
+        self.logger.info(f"  - 하트비트 시간: {datetime.fromtimestamp(self.last_heartbeat)}")
+        self.logger.info(f"  - 위치 정보: {position}")
+        self.logger.info(f"  - 트리거: 위치 업데이트 콜백 (M114 응답)")
         
         self.position_data = position
         self._trigger_callback('on_position_update', position)
@@ -479,7 +522,13 @@ class FactorClient:
         """G-code 응답 콜백"""
         # G-code 응답 시에도 하트비트 업데이트
         self.last_heartbeat = time.time()
-        self.logger.debug(f"하트비트 업데이트 - G-code 응답")
+        self.last_gcode_response = time.time()  # G-code 응답 시간 업데이트
+        
+        # 하트비트 업데이트 상세 로깅
+        self.logger.info(f"하트비트 업데이트 - G-code 응답")
+        self.logger.info(f"  - 하트비트 시간: {datetime.fromtimestamp(self.last_heartbeat)}")
+        self.logger.info(f"  - G-code 응답: {response.response}")
+        self.logger.info(f"  - 트리거: G-code 응답 콜백")
         
         self._trigger_callback('on_gcode_response', response)
         self._trigger_callback('on_message', response.response)
