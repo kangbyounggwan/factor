@@ -101,10 +101,16 @@ def get_printer_info() -> Dict[str, Any]:
                             pc.serial_conn.write(b"M115\n")
                             pc.serial_conn.flush()
                             
-                            # 응답 대기
+                            # 응답 대기 및 여러 라인 읽기
                             time.sleep(0.5)
-                            if pc.serial_conn.in_waiting > 0:
+                            responses = []
+                            while pc.serial_conn.in_waiting > 0:
                                 response = pc.serial_conn.readline().decode('utf-8', 'ignore').strip()
+                                if response:
+                                    responses.append(response)
+                            
+                            # 응답 파싱
+                            for response in responses:
                                 if response.startswith("FIRMWARE_NAME:"):
                                     # FIRMWARE_NAME: Marlin 2.1.2.1 (GitHub) (Creality Ender-3 V3 SE)
                                     firmware_info = response.replace("FIRMWARE_NAME:", "").strip()
@@ -117,8 +123,28 @@ def get_printer_info() -> Dict[str, Any]:
                                         printer_info["model"] = "Creality Ender-3"
                                     elif "Ender-5" in firmware_info:
                                         printer_info["model"] = "Creality Ender-5"
+                                    elif "Prusa" in firmware_info:
+                                        printer_info["model"] = "Prusa i3"
+                                    elif "Ultimaker" in firmware_info:
+                                        printer_info["model"] = "Ultimaker"
                                     else:
                                         printer_info["model"] = "Unknown 3D Printer"
+                                    break
+                                elif "Klipper" in response:
+                                    printer_info["firmware"] = "Klipper"
+                                    printer_info["model"] = "Klipper-based Printer"
+                                    break
+                                elif "RepRapFirmware" in response:
+                                    printer_info["firmware"] = "RepRapFirmware"
+                                    printer_info["model"] = "RepRap-based Printer"
+                                    break
+                            
+                            # 설정 파일에서 모델 정보 확인
+                            if printer_info["model"] == "Unknown 3D Printer":
+                                model_from_config = printer_config.get('model', '')
+                                if model_from_config:
+                                    printer_info["model"] = model_from_config
+                                    
                         except Exception as e:
                             logging.getLogger('ble-gatt').warning(f"프린터 정보 조회 실패: {e}")
                             printer_info["model"] = "Unknown 3D Printer"
@@ -237,6 +263,33 @@ def get_software_info() -> Dict[str, Any]:
             "python_version": f"{psutil.sys.version_info.major}.{psutil.sys.version_info.minor}.{psutil.sys.version_info.micro}",
             "uptime": int(time.time() - psutil.boot_time())
         }
+        
+        # 라즈베리파이 모델 정보 조회
+        try:
+            with open('/proc/cpuinfo', 'r') as f:
+                cpuinfo = f.read()
+                if 'Raspberry Pi' in cpuinfo:
+                    for line in cpuinfo.split('\n'):
+                        if 'Model' in line:
+                            model = line.split(':')[1].strip()
+                            software_info["system"]["hardware_model"] = model
+                            break
+        except Exception:
+            software_info["system"]["hardware_model"] = "Unknown"
+        
+        # OS 정보 조회
+        try:
+            import platform
+            software_info["system"]["os"] = f"{platform.system()} {platform.release()}"
+        except Exception:
+            software_info["system"]["os"] = "Unknown"
+        
+        # Factor Client 버전 정보
+        try:
+            from core import __version__
+            software_info["firmware_version"] = __version__
+        except ImportError:
+            pass
         
     except Exception as e:
         logging.getLogger('ble-gatt').exception("소프트웨어 정보 조회 중 오류")
