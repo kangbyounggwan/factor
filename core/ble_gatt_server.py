@@ -379,29 +379,58 @@ class ObjectManager(ServiceInterface):
 class WifiRegisterChar(GattCharacteristic):
     def __init__(self):
         super().__init__(WIFI_REGISTER_CHAR_UUID, ['write', 'notify'], WIFI_CHAR_PATH)
+        # 청크 조합을 위한 버퍼 추가
+        self._chunk_buffer = b''
+        self._chunk_timeout = None
 
     @method()
     def WriteValue(self, value: 'ay', options: 'a{sv}'):
         raw = bytes(value)
-        # 요청(Write) 프리뷰 로깅
+        
+        # 청크 버퍼에 추가
+        self._chunk_buffer += raw
+        
+        # 청크 타임아웃 리셋 (1초 후 청크 조합 완료로 간주)
+        if self._chunk_timeout:
+            self._chunk_timeout.cancel()
+        
+        loop = asyncio.get_event_loop()
+        self._chunk_timeout = loop.call_later(1.0, self._process_complete_message)
+        
+        # 현재 청크 로깅
         try:
             preview = raw[:256].decode('utf-8', 'replace')
             logging.getLogger('ble-gatt').info(
-                "Write [%s] bytes=%d preview=%s", self.uuid, len(raw), preview
+                "Write chunk [%s] bytes=%d total=%d preview=%s", 
+                self.uuid, len(raw), len(self._chunk_buffer), preview
             )
         except Exception:
-            logging.getLogger('ble-gatt').exception(
-                "Write 프리뷰 로깅 실패 (non-utf8 처리) [%s] bytes=%d", self.uuid, len(raw)
+            logging.getLogger('ble-gatt').info(
+                "Write chunk [%s] bytes=%d total=%d (non-utf8)", 
+                self.uuid, len(raw), len(self._chunk_buffer)
             )
+
+    def _process_complete_message(self):
+        """청크 조합 완료 후 전체 메시지 처리"""
+        if not self._chunk_buffer:
+            return
+            
         try:
-            msg = json.loads(raw.decode('utf-8', 'ignore'))
+            # 전체 메시지 로깅
+            preview = self._chunk_buffer[:256].decode('utf-8', 'replace')
+            logging.getLogger('ble-gatt').info(
+                "Write complete [%s] total_bytes=%d preview=%s", 
+                self.uuid, len(self._chunk_buffer), preview
+            )
+            
+            msg = json.loads(self._chunk_buffer.decode('utf-8', 'ignore'))
             mtype = str(msg.get('type', '')).lower()
         except Exception:
-            logging.getLogger('ble-gatt').exception("WriteValue JSON 파싱 실패")
+            logging.getLogger('ble-gatt').exception("청크 조합 메시지 처리 실패")
             rsp = {"type": "wifi_scan_result", "data": {"success": False, "error": "invalid_json"}, "timestamp": _now_ts()}
             self._notify_value(_json_bytes(rsp))
+            self._chunk_buffer = b''
             return
-        
         
         # 라즈베리파이에서 네트워크 스캔 결과 반환
         if mtype == 'wifi_scan':
@@ -450,6 +479,9 @@ class WifiRegisterChar(GattCharacteristic):
         else:
             rsp = {"type": "wifi_error", "data": {"success": False, "error": "unknown_type", "type": mtype}, "timestamp": _now_ts()}
             self._notify_value(_json_bytes(rsp))
+        
+        # 처리 완료 후 버퍼 클리어
+        self._chunk_buffer = b''
 
 
 class EquipmentSettingsChar(GattCharacteristic):
