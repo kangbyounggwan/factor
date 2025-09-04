@@ -18,6 +18,7 @@ import subprocess
 from typing import Any, Dict, List
 from core.ble_service.utils import json_bytes as _json_bytes_ext, now_ts as _now_ts_ext, now_ms as _now_ms_ext
 from core.ble_service.wifi import scan_wifi_networks as _scan_wifi_networks_ext, get_network_status as _get_network_status_ext, wpa_connect_immediate as _wpa_connect_immediate_ext, nm_connect_immediate as _nm_connect_immediate_ext, _nm_is_running as _nm_is_running_ext
+from core.ble_service.equipment import get_equipment_info as _get_equipment_info_ext
 
 from dbus_next.aio import MessageBus
 from dbus_next.service import ServiceInterface, method, dbus_property
@@ -476,6 +477,8 @@ class WifiRegisterChar(GattCharacteristic):
                 }
             }
             self._notify_value(_json_bytes_ext(rsp))
+        
+
         else:
             rsp = {"type": "wifi_error", "data": {"success": False, "error": "unknown_type", "type": mtype}, "timestamp": _now_ts()}
             self._notify_value(_json_bytes(rsp))
@@ -488,30 +491,76 @@ class EquipmentSettingsChar(GattCharacteristic):
     def __init__(self):
         super().__init__(EQUIPMENT_SETTINGS_CHAR_UUID, ['write', 'notify'], EQUIP_CHAR_PATH)
         self._settings: Dict[str, Any] = {}
+        # 청크 조합을 위한 버퍼 추가
+        self._chunk_buffer = b''
+        self._chunk_timeout = None
 
     @method()
     def WriteValue(self, value: 'ay', options: 'a{sv}'):
         raw = bytes(value)
-        # 요청(Write) 프리뷰 로깅
+        
+        # 청크 버퍼에 추가
+        self._chunk_buffer += raw
+        
+        # 청크 타임아웃 리셋 (1초 후 청크 조합 완료로 간주)
+        if self._chunk_timeout:
+            self._chunk_timeout.cancel()
+        
+        loop = asyncio.get_event_loop()
+        self._chunk_timeout = loop.call_later(1.0, self._process_complete_message)
+        
+        # 현재 청크 로깅
         try:
             preview = raw[:256].decode('utf-8', 'replace')
             logging.getLogger('ble-gatt').info(
-                "Write [%s] bytes=%d preview=%s", self.uuid, len(raw), preview
+                "Write chunk [%s] bytes=%d total=%d preview=%s", 
+                self.uuid, len(raw), len(self._chunk_buffer), preview
             )
         except Exception:
             logging.getLogger('ble-gatt').info(
-                "Write [%s] bytes=%d (non-utf8)", self.uuid, len(raw)
+                "Write chunk [%s] bytes=%d total=%d (non-utf8)", 
+                self.uuid, len(raw), len(self._chunk_buffer)
             )
+
+    def _process_complete_message(self):
+        """청크 조합 완료 후 전체 메시지 처리"""
+        if not self._chunk_buffer:
+            return
+            
         try:
-            msg = json.loads(raw.decode('utf-8', 'ignore'))
-            if str(msg.get('type', '')).lower() == 'equipment_update':
-                self._settings.update(msg.get('data') or {})
-                rsp = {"type": "equipment_update_result", "data": {"ok": True, "applied": self._settings}, "timestamp": _now_ts()}
+            # 전체 메시지 로깅
+            preview = self._chunk_buffer[:256].decode('utf-8', 'replace')
+            logging.getLogger('ble-gatt').info(
+                "Write complete [%s] total_bytes=%d preview=%s", 
+                self.uuid, len(self._chunk_buffer), preview
+            )
+            
+            # JSON 파싱 전에 버퍼 클리어 (중복 방지)
+            buffer_copy = self._chunk_buffer
+            self._chunk_buffer = b''
+            
+            msg = json.loads(buffer_copy.decode('utf-8', 'ignore'))
+            mtype = str(msg.get('type', '')).lower()
+            
+            if mtype == 'get_equipment_info':
+                # 설비 정보 조회
+                equipment_data = _get_equipment_info_ext()
+                rsp = {
+                    "type": "get_equipment_info_result",
+                    "data": equipment_data,
+                    "timestamp": _now_ts_ext()
+                }
             else:
-                rsp = {"type": "equipment_error", "data": {"ok": False, "error": "unknown_type"}, "timestamp": _now_ts()}
+                rsp = {"type": "equipment_error", "data": {"ok": False, "error": "unknown_type", "type": mtype}, "timestamp": _now_ts_ext()}
+                
         except Exception:
-            rsp = {"type": "equipment_error", "data": {"ok": False, "error": "invalid_json"}, "timestamp": _now_ts()}
-        self._notify_value(_json_bytes(rsp))
+            logging.getLogger('ble-gatt').exception("청크 조합 메시지 처리 실패")
+            rsp = {"type": "equipment_error", "data": {"ok": False, "error": "invalid_json"}, "timestamp": _now_ts_ext()}
+            self._chunk_buffer = b''
+            return
+        
+        # 응답 전송
+        self._notify_value(_json_bytes_ext(rsp))
 
 
 class NoIOAgent(ServiceInterface):
