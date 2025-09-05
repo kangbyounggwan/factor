@@ -4,7 +4,7 @@ Flask 웹 애플리케이션
 """
 
 from flask import Flask, render_template, request, jsonify, Response # type: ignore
-from flask_cors import CORS
+# from flask_cors import CORS  # 라즈베리파이 성능 최적화를 위해 제거
 from flask_socketio import SocketIO
 import logging
 import time
@@ -24,9 +24,10 @@ def create_app(config_manager: ConfigManager, factor_client=None):
     
     app = Flask(__name__)
     
-    CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True,
-    allow_headers=["Content-Type", "X-Trace-Id"],
-    methods=["GET","POST","PUT","DELETE","OPTIONS"])
+    # CORS 설정 제거 - 라즈베리파이 성능 최적화
+    # CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True,
+    # allow_headers=["Content-Type", "X-Trace-Id"],
+    # methods=["GET","POST","PUT","DELETE","OPTIONS"])
     
     # 설정
     server_config = config_manager.get_server_config()
