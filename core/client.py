@@ -567,11 +567,11 @@ class FactorClient:
         self.last_heartbeat = time.time()
         self.last_state_response = time.time()  # 상태 변경 응답 시간 업데이트
         
-        # 하트비트 업데이트 상세 로깅
-        self.logger.info(f"하트비트 업데이트 - 프린터 상태 변경: {old_state_name} → {status.state}")
-        self.logger.info(f"  - 하트비트 시간: {datetime.fromtimestamp(self.last_heartbeat)}")
-        self.logger.info(f"  - 상태 플래그: {status.flags}")
-        self.logger.info(f"  - 트리거: 프린터 상태 변경 콜백")
+        # 하트비트 업데이트 상세 로깅 (DEBUG 레벨로 변경)
+        self.logger.debug(f"하트비트 업데이트 - 프린터 상태 변경: {old_state_name} → {status.state}")
+        self.logger.debug(f"  - 하트비트 시간: {datetime.fromtimestamp(self.last_heartbeat)}")
+        self.logger.debug(f"  - 상태 플래그: {status.flags}")
+        self.logger.debug(f"  - 트리거: 프린터 상태 변경 콜백")
         
         self._trigger_callback('on_printer_state_change', status)
         self.logger.info(f"프린터 상태 변경: {status.state}")
@@ -582,11 +582,11 @@ class FactorClient:
         self.last_heartbeat = time.time()
         self.last_temperature_response = time.time()  # M105 응답 시간 업데이트
         
-        # 하트비트 업데이트 상세 로깅
-        self.logger.info(f"하트비트 업데이트 - 온도 업데이트")
-        self.logger.info(f"  - 하트비트 시간: {datetime.fromtimestamp(self.last_heartbeat)}")
-        self.logger.info(f"  - 온도 정보: {temp_info}")
-        self.logger.info(f"  - 트리거: 온도 업데이트 콜백 (M105 응답)")
+        # 하트비트 업데이트 상세 로깅 (DEBUG 레벨로 변경)
+        self.logger.debug(f"하트비트 업데이트 - 온도 업데이트")
+        self.logger.debug(f"  - 하트비트 시간: {datetime.fromtimestamp(self.last_heartbeat)}")
+        self.logger.debug(f"  - 온도 정보: {temp_info}")
+        self.logger.debug(f"  - 트리거: 온도 업데이트 콜백 (M105 응답)")
         
         self._trigger_callback('on_temperature_update', temp_info)
         self.logger.debug(f"온도 업데이트: {temp_info}")
@@ -597,11 +597,11 @@ class FactorClient:
         self.last_heartbeat = time.time()
         self.last_position_response = time.time()  # M114 응답 시간 업데이트
         
-        # 하트비트 업데이트 상세 로깅
-        self.logger.info(f"하트비트 업데이트 - 위치 업데이트")
-        self.logger.info(f"  - 하트비트 시간: {datetime.fromtimestamp(self.last_heartbeat)}")
-        self.logger.info(f"  - 위치 정보: {position}")
-        self.logger.info(f"  - 트리거: 위치 업데이트 콜백 (M114 응답)")
+        # 하트비트 업데이트 상세 로깅 (DEBUG 레벨로 변경)
+        self.logger.debug(f"하트비트 업데이트 - 위치 업데이트")
+        self.logger.debug(f"  - 하트비트 시간: {datetime.fromtimestamp(self.last_heartbeat)}")
+        self.logger.debug(f"  - 위치 정보: {position}")
+        self.logger.debug(f"  - 트리거: 위치 업데이트 콜백 (M114 응답)")
         
         self.position_data = position
         self._trigger_callback('on_position_update', position)
@@ -613,11 +613,11 @@ class FactorClient:
         self.last_heartbeat = time.time()
         self.last_gcode_response = time.time()  # G-code 응답 시간 업데이트
         
-        # 하트비트 업데이트 상세 로깅
-        self.logger.info(f"하트비트 업데이트 - G-code 응답")
-        self.logger.info(f"  - 하트비트 시간: {datetime.fromtimestamp(self.last_heartbeat)}")
-        self.logger.info(f"  - G-code 응답: {response.response}")
-        self.logger.info(f"  - 트리거: G-code 응답 콜백")
+        # 하트비트 업데이트 상세 로깅 (DEBUG 레벨로 변경)
+        self.logger.debug(f"하트비트 업데이트 - G-code 응답")
+        self.logger.debug(f"  - 하트비트 시간: {datetime.fromtimestamp(self.last_heartbeat)}")
+        self.logger.debug(f"  - G-code 응답: {response.response}")
+        self.logger.debug(f"  - 트리거: G-code 응답 콜백")
         
         self._trigger_callback('on_gcode_response', response)
         self._trigger_callback('on_message', response.response)

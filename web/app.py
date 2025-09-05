@@ -30,7 +30,7 @@ def create_app(config_manager: ConfigManager, factor_client=None):
     app = Flask(__name__)
     
     CORS(app, resources={
-        r"/api/*": {
+        r"/*": {
             "origins": ALLOWED_ORIGINS,
             "supports_credentials": True,
             "max_age": 600,  # preflight 캐시(초)
