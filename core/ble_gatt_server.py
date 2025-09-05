@@ -632,10 +632,11 @@ class LEAdvertisement(ServiceInterface):
 
 async def _async_run(logger: logging.Logger):
     bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
-    try:
-        await bus.request_name('org.factor.gatt')
-    except Exception:
-        logging.getLogger('ble-gatt').exception("DBus 이름 요청 실패(org.factor.gatt)")
+    # D-Bus 서비스 이름 요청 제거 - 보안 정책 문제 해결
+    # try:
+    #     await bus.request_name('org.bluez.factor')
+    # except Exception:
+    #     logging.getLogger('ble-gatt').exception("DBus 이름 요청 실패(org.bluez.factor)")
 
     adapter_path = '/org/bluez/hci0'
     obj = await bus.introspect(BLUEZ, adapter_path)
