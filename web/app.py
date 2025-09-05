@@ -231,11 +231,11 @@ def setup_socketio_handlers(socketio, factor_client):
     def on_position_update(position):
         socketio.emit('position_update', position.to_dict())
     
-    def on_connect():
-        socketio.emit('octoprint_connected', {'message': 'OctoPrint 연결됨'})
+    def on_connect(*args, **kwargs):
+        socketio.emit('factor_connected', {'message': 'Factor Client 연결됨'})
     
-    def on_disconnect():
-        socketio.emit('octoprint_disconnected', {'message': 'OctoPrint 연결 해제됨'})
+    def on_disconnect(*args, **kwargs):
+        socketio.emit('factor_disconnected', {'message': 'Factor Client 연결 해제됨'})
     
     # 콜백 등록
     factor_client.add_callback('on_printer_state_change', on_printer_state_change)

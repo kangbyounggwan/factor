@@ -771,13 +771,17 @@ def start_ble_gatt_server(logger: logging.Logger) -> None:
             gatt_mgr = adapter.get_interface(GATT_MANAGER_IFACE)
             try:
                 await gatt_mgr.call_unregister_application(APP_PATH)
-            except Exception:
-                logging.getLogger('ble-gatt').exception("GATT 앱 해제 호출 실패")
+            except Exception as e:
+                # "Does Not Exist" 에러는 정상적인 상황 (이미 해제됨)
+                if "Does Not Exist" not in str(e):
+                    logging.getLogger('ble-gatt').warning(f"GATT 앱 해제 호출 실패: {e}")
             try:
                 adv_mgr = adapter.get_interface(LE_ADV_MANAGER_IFACE)
                 await adv_mgr.call_unregister_advertisement(ADV_PATH)
-            except Exception:
-                logging.getLogger('ble-gatt').exception("광고 해제 호출 실패")
+            except Exception as e:
+                # "Does Not Exist" 에러는 정상적인 상황 (이미 해제됨)
+                if "Does Not Exist" not in str(e):
+                    logging.getLogger('ble-gatt').warning(f"광고 해제 호출 실패: {e}")
         except Exception:
             logging.getLogger('ble-gatt').exception("정리 루틴(bus 연결/조회) 실패")
 
