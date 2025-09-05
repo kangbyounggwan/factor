@@ -110,47 +110,45 @@ def get_printer_info() -> Dict[str, Any]:
                                 if response:
                                     responses.append(response)
                             
-                            # 응답 파싱 - 각 라인별로 정확히 처리
+                            # ===== M115 첫 줄(KV 묶음 라인) 우선 파싱 =====
+                            # 예: "FIRMWARE_NAME:Marlin ... SOURCE_CODE_URL:... UUID:..."
                             import re
-                            
-                            # 각 응답 라인을 개별적으로 처리
-                            for response in responses:
-                                response = response.strip()
-                                if not response:
-                                    continue
-                                
-                                # FIRMWARE_NAME 추출
-                                if response.startswith('FIRMWARE_NAME:'):
-                                    firmware_info = response.replace('FIRMWARE_NAME:', '').strip()
-                                    printer_info["firmware"] = firmware_info
-                                
-                                # MACHINE_TYPE 추출 (가장 정확한 모델명)
-                                elif response.startswith('MACHINE_TYPE:'):
-                                    machine_type = response.replace('MACHINE_TYPE:', '').strip()
-                                    printer_info["model"] = machine_type
-                                
-                                # UUID 추출
-                                elif response.startswith('UUID:'):
-                                    uuid = response.replace('UUID:', '').strip()
-                                    printer_info["uuid"] = uuid
-                                
-                                # PROTOCOL_VERSION 추출
-                                elif response.startswith('PROTOCOL_VERSION:'):
-                                    protocol = response.replace('PROTOCOL_VERSION:', '').strip()
-                                    printer_info["protocol_version"] = protocol
-                                
-                                # EXTRUDER_COUNT 추출
-                                elif response.startswith('EXTRUDER_COUNT:'):
-                                    extruder_count = response.replace('EXTRUDER_COUNT:', '').strip()
+                            def _parse_m115_kv_line(line: str) -> dict:
+                                pattern = re.compile(r'([A-Z_]+):\s*(.*?)(?=\s+[A-Z_]+:|$)')
+                                return {m.group(1): m.group(2).strip() for m in pattern.finditer(line.strip())}
+
+                            first_kv_line = ""
+                            for ln in responses:
+                                # KEY: 토큰이 2개 이상 포함된 라인을 우선 선택
+                                if len(re.findall(r'[A-Z_]+:', ln)) >= 2:
+                                    first_kv_line = ln.strip()
+                                    break
+
+                            if first_kv_line:
+                                kv = _parse_m115_kv_line(first_kv_line)
+                                fw = kv.get("FIRMWARE_NAME")
+                                if fw:
+                                    printer_info["firmware"] = fw
+                                model = kv.get("MACHINE_TYPE")
+                                if model:
+                                    printer_info["model"] = model
+                                uuid_val = kv.get("UUID")
+                                if uuid_val:
+                                    printer_info["uuid"] = uuid_val
+                                proto = kv.get("PROTOCOL_VERSION")
+                                if proto:
+                                    printer_info["protocol_version"] = proto
+                                ec = kv.get("EXTRUDER_COUNT")
+                                if ec:
                                     try:
-                                        printer_info["extruder_count"] = int(extruder_count)
+                                        printer_info["extruder_count"] = int(ec)
                                     except ValueError:
                                         pass
-                                
-                                # SOURCE_CODE_URL 추출
-                                elif response.startswith('SOURCE_CODE_URL:'):
-                                    source_url = response.replace('SOURCE_CODE_URL:', '').strip()
-                                    printer_info["source_code_url"] = source_url
+                                src = kv.get("SOURCE_CODE_URL")
+                                if src:
+                                    printer_info["source_code_url"] = src
+
+                            # 라인별 세부 파싱은 제거 (첫 줄 KV 파서만 사용)
                             
                             # MACHINE_TYPE이 없으면 FIRMWARE_NAME에서 모델명 추출 시도
                             if not printer_info.get("model") or printer_info["model"] == "Unknown":
