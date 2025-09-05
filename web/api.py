@@ -108,7 +108,9 @@ def get_status():
                 }
         except Exception:
             pass
+
         
+        status_data['equipment_uuid'] = equipment_uuid
         return jsonify(status_data)
         
     except Exception as e:
