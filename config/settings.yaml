@@ -8,8 +8,8 @@ printer:
   port: /dev/ttyUSB0
   baudrate: 115200
   firmware_type: auto
-  temp_poll_interval: 2.0
-  position_poll_interval: 5.0
+  temp_poll_interval: 30.0
+  position_poll_interval: 30.0
   timeout: 5
 logging:
   level: DEBUG
@@ -48,8 +48,8 @@ printer:
   port: /dev/ttyUSB0
   baudrate: 115200
   firmware_type: auto
-  temp_poll_interval: 2.0
-  position_poll_interval: 5.0
+  temp_poll_interval: 30.0
+  position_poll_interval: 30.0
   timeout: 5
   firmware_support:
     - marlin
