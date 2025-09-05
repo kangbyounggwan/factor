@@ -56,6 +56,14 @@ def get_status():
                 pos_dict = pc.current_position.to_dict()
             except Exception:
                 pos_dict = {'x': 0, 'y': 0, 'z': 0, 'e': 0}
+            # 설비 UUID 정보 가져오기 (업로드 보호 중)
+            equipment_uuid = None
+            try:
+                if hasattr(pc, '_last_printer_info') and pc._last_printer_info:
+                    equipment_uuid = pc._last_printer_info.get('uuid')
+            except Exception:
+                pass
+            
             status_data = {
                 'printer_status': factor_client.get_printer_status().to_dict(),
                 'temperature_info': temp_dict,
@@ -63,9 +71,20 @@ def get_status():
                 'progress': factor_client.get_print_progress().to_dict(),
                 'system_info': factor_client.get_system_info().to_dict(),
                 'connected': factor_client.is_connected(),
-                'timestamp': factor_client.last_heartbeat
+                'timestamp': factor_client.last_heartbeat,
+                'equipment_uuid': equipment_uuid
             }
         else:
+            # 설비 UUID 정보 가져오기
+            equipment_uuid = None
+            try:
+                if hasattr(factor_client, 'printer_comm') and factor_client.printer_comm:
+                    pc = factor_client.printer_comm
+                    if hasattr(pc, '_last_printer_info') and pc._last_printer_info:
+                        equipment_uuid = pc._last_printer_info.get('uuid')
+            except Exception:
+                pass
+            
             status_data = {
                 'printer_status': factor_client.get_printer_status().to_dict(),
                 'temperature_info': factor_client.get_temperature_info().to_dict(),
@@ -73,7 +92,8 @@ def get_status():
                 'progress': factor_client.get_print_progress().to_dict(),
                 'system_info': factor_client.get_system_info().to_dict(),
                 'connected': factor_client.is_connected(),
-                'timestamp': factor_client.last_heartbeat
+                'timestamp': factor_client.last_heartbeat,
+                'equipment_uuid': equipment_uuid
             }
         # SD 진행률 캐시가 활성화되어 있으면 진행률 필드를 캐시로 대체
         try:

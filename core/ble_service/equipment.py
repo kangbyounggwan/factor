@@ -50,7 +50,8 @@ def get_printer_info() -> Dict[str, Any]:
         "model": "Unknown",
         "firmware": "Unknown", 
         "serial_port": "",
-        "baud_rate": 115200
+        "baud_rate": 115200,
+        "uuid": None
     }
     
     try:
