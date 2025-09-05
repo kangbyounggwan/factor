@@ -334,6 +334,9 @@ class FactorClient:
                         active_threads = [t for t in self.polling_threads if t.is_alive()]
                         self.logger.error(f"  - 활성 폴링 스레드: {len(active_threads)}/{len(self.polling_threads)}")
                         
+                        # 하트비트 타임아웃 복구 시도
+                        self._attempt_heartbeat_recovery()
+                        
                         self._handle_error("heartbeat_timeout")
                     
                     # 메모리 사용량 확인
@@ -401,6 +404,87 @@ class FactorClient:
                 self.logger.critical("최대 오류 횟수 초과 - 프로그램 종료")
                 self.stop()
     
+    def _attempt_heartbeat_recovery(self):
+        """하트비트 타임아웃 복구 시도"""
+        try:
+            self.logger.info("하트비트 복구 시도 시작")
+            
+            # 1. 프린터 통신 상태 확인
+            if not self.printer_comm or not self.printer_comm.connected:
+                self.logger.warning("프린터 통신이 끊어짐 - 재연결 시도")
+                self._reconnect_printer()
+                return
+            
+            # 2. 프린터 상태 확인 명령 전송
+            self.logger.info("프린터 상태 확인 명령 전송 (M115)")
+            self.printer_comm.send_command("M115")
+            
+            # 3. 온도 확인 명령 전송
+            self.logger.info("온도 확인 명령 전송 (M105)")
+            self.printer_comm.send_command("M105")
+            
+            # 4. 위치 확인 명령 전송
+            self.logger.info("위치 확인 명령 전송 (M114)")
+            self.printer_comm.send_command("M114")
+            
+            # 5. 짧은 대기 후 응답 확인
+            time.sleep(2)
+            
+            # 6. 응답이 있었는지 확인
+            current_time = time.time()
+            temp_time_since = current_time - self.last_temperature_response
+            pos_time_since = current_time - self.last_position_response
+            gcode_time_since = current_time - self.last_gcode_response
+            
+            if temp_time_since < 5 or pos_time_since < 5 or gcode_time_since < 5:
+                self.logger.info("하트비트 복구 성공 - 프린터 응답 확인됨")
+                # 하트비트 시간 업데이트
+                self.last_heartbeat = current_time
+                self.last_temperature_response = current_time
+                self.last_position_response = current_time
+                self.last_gcode_response = current_time
+                self.last_state_response = current_time
+                # 에러 카운트 리셋
+                self.error_count = 0
+                self.logger.info("하트비트 시간 초기화 완료 및 에러 카운트 리셋")
+            else:
+                self.logger.warning("하트비트 복구 실패 - 프린터 응답 없음")
+                
+        except Exception as e:
+            self.logger.error(f"하트비트 복구 시도 중 오류: {e}")
+    
+    def _reconnect_printer(self):
+        """프린터 재연결 시도"""
+        try:
+            self.logger.info("프린터 재연결 시도")
+            
+            # 기존 연결 종료
+            if self.printer_comm:
+                self.printer_comm.disconnect()
+                time.sleep(1)
+            
+            # 새 연결 시도
+            self.printer_comm = PrinterCommunicator(self.config)
+            self.printer_comm.connect()
+            
+            if self.printer_comm.connected:
+                self.logger.info("프린터 재연결 성공")
+                # 하트비트 시간 초기화
+                current_time = time.time()
+                self.last_heartbeat = current_time
+                self.last_temperature_response = current_time
+                self.last_position_response = current_time
+                self.last_gcode_response = current_time
+                self.last_state_response = current_time
+                # 에러 카운트 리셋
+                self.error_count = 0
+                self.logger.info("프린터 재연결 완료 및 에러 카운트 리셋")
+            else:
+                self.logger.error("프린터 재연결 실패")
+                
+        except Exception as e:
+            self.logger.error(f"프린터 재연결 중 오류: {e}")
+    
     def _data_worker(self):
         """데이터 처리 워커"""
         while self.running:
@@ -446,13 +530,18 @@ class FactorClient:
                     uptime=int(time.time() - psutil.boot_time())
                 )
                 
+                # 설정에서 임계값 가져오기
+                cpu_threshold = self.config.get('monitoring.cpu_threshold', 80)
+                memory_threshold = self.config.get('monitoring.memory_threshold', 85)
+                temp_threshold = self.config.get('monitoring.temperature_threshold', 70)
+                
                 # 임계값 확인
-                if cpu_percent > 80:
-                    self.logger.warning(f"CPU 사용률 높음: {cpu_percent}%")
-                if memory.percent > 85:
-                    self.logger.warning(f"메모리 사용률 높음: {memory.percent}%")
-                if cpu_temp > 70:
-                    self.logger.warning(f"CPU 온도 높음: {cpu_temp}°C")
+                if cpu_percent > cpu_threshold:
+                    self.logger.warning(f"CPU 사용률 높음: {cpu_percent}% (임계값: {cpu_threshold}%)")
+                if memory.percent > memory_threshold:
+                    self.logger.warning(f"메모리 사용률 높음: {memory.percent}% (임계값: {memory_threshold}%)")
+                if cpu_temp > temp_threshold:
+                    self.logger.warning(f"CPU 온도 높음: {cpu_temp}°C (임계값: {temp_threshold}°C)")
                 
                 time.sleep(30)  # 30초마다 모니터링
                 
