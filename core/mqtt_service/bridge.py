@@ -1,6 +1,7 @@
 import json
 import uuid
 import os
+from core.system_utils import get_pi_serial
 import paho.mqtt.client as mqtt
 from .topics import topic_cmd, topic_lwt
 from .handlers.status import handle_get_status
@@ -27,29 +28,7 @@ class MQTTService:
         self.client.on_message = self._on_message
         self.client.on_disconnect = self._on_disconnect
         self._running = False
-        self.dashboard_topic = f"DASHBOARD/{self._get_pi_serial()}"
-
-    def _get_pi_serial(self) -> str:
-        try:
-            serial_paths = [
-                "/proc/device-tree/serial-number",
-                "/sys/firmware/devicetree/base/serial-number"
-            ]
-            for spath in serial_paths:
-                if os.path.exists(spath):
-                    with open(spath, 'rb') as f:
-                        raw = f.read()
-                        value = raw.decode('utf-8', 'ignore').replace('\x00', '').strip()
-                        if value:
-                            return value
-        except Exception:
-            pass
-        # fallback: MAC
-        try:
-            mac = uuid.getnode()
-            return f"{mac:012x}"
-        except Exception:
-            return "UNKNOWN"
+        self.dashboard_topic = f"DASHBOARD/{get_pi_serial()}"
 
     def _on_connect(self, client, userdata, flags, rc):
         client.subscribe(topic_cmd(self.cm), qos=1)
