@@ -1,13 +1,14 @@
 import json
 import uuid
 import os
+import logging
 import threading
 import time
 from core.system_utils import get_pi_serial
 import paho.mqtt.client as mqtt
 from .topics import (
     topic_cmd, topic_lwt,
-    topic_dashboard, topic_admin_cmd, topic_admin_mcode
+    topic_dashboard, topic_admin_cmd, topic_admin_mcode, topic_dash_status
 )
 from .handlers.status import handle_get_status
 from .handlers.commands import handle_command
@@ -17,6 +18,7 @@ class MQTTService:
     def __init__(self, config_manager, factor_client=None):
         self.cm = config_manager
         self.fc = factor_client
+        self.logger = logging.getLogger('mqtt-bridge')
         self.host = self.cm.get('mqtt.host', None)
         self.port = int(self.cm.get('mqtt.port', 1883))
         self.username = self.cm.get('mqtt.username', None)
@@ -35,6 +37,7 @@ class MQTTService:
         self._running = False
         # 대시보드/관리자 채널 토픽들
         device_serial = get_pi_serial()
+        self.device_serial = device_serial
         self.dashboard_topic = topic_dashboard(device_serial)
         self.admin_cmd_topic = topic_admin_cmd(device_serial)
         self.admin_mcode_topic = topic_admin_mcode(device_serial)
@@ -70,6 +73,10 @@ class MQTTService:
 
         # 대시보드 상태 요청: 1.5초 간격 지속 발행 시작
         if mtype == 'get_status':
+            try:
+                self.logger.info(f"get_status 요청 수신 - 스트리밍 시작(interval={self._status_interval}s)")
+            except Exception:
+                pass
             # 즉시 한 번 발행
             handle_get_status(self.client, self.cm, self.fc)
             # 이미 스트리밍 중이면 무시
@@ -77,6 +84,10 @@ class MQTTService:
                 self._start_status_stream()
         # 상태 스트리밍 중단
         elif mtype == 'get_status_stop':
+            try:
+                self.logger.info("get_status_stop 요청 수신 - 스트리밍 중단")
+            except Exception:
+                pass
             self._stop_status_stream()
         # 관리자 일반 명령 (reboot 등)
         elif mtype == 'command' and msg.topic == self.admin_cmd_topic:
@@ -124,10 +135,19 @@ class MQTTService:
     # ===== 내부: 상태 스트리밍 구현 =====
     def _start_status_stream(self):
         self._status_streaming = True
+        try:
+            self.logger.info("상태 스트리밍 스레드 시작")
+        except Exception:
+            pass
 
         def _run():
             while self._status_streaming:
                 try:
+                    # INFO 로그: 매 발행 시 토픽 기록
+                    try:
+                        self.logger.info(f"status publish -> {topic_dash_status(self.device_serial)}")
+                    except Exception:
+                        pass
                     handle_get_status(self.client, self.cm, self.fc)
                 except Exception:
                     pass
@@ -142,6 +162,10 @@ class MQTTService:
             if self._status_thread and self._status_thread.is_alive():
                 # 짧게 대기 후 해제
                 self._status_thread.join(timeout=0.2)
+            try:
+                self.logger.info("상태 스트리밍 스레드 종료")
+            except Exception:
+                pass
         except Exception:
             pass
         self._status_thread = None
