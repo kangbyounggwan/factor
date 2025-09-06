@@ -1,6 +1,8 @@
 import json
 import uuid
 import os
+import threading
+import time
 from core.system_utils import get_pi_serial
 import paho.mqtt.client as mqtt
 from .topics import (
@@ -36,6 +38,13 @@ class MQTTService:
         self.dashboard_topic = topic_dashboard(device_serial)
         self.admin_cmd_topic = topic_admin_cmd(device_serial)
         self.admin_mcode_topic = topic_admin_mcode(device_serial)
+        # 상태 스트리밍 관리 변수
+        try:
+            self._status_interval = float(self.cm.get('mqtt.status_interval', 1.5))
+        except Exception:
+            self._status_interval = 1.5
+        self._status_streaming = False
+        self._status_thread = None
 
     def _on_connect(self, client, userdata, flags, rc):
         client.subscribe(topic_cmd(self.cm), qos=1)
@@ -59,9 +68,16 @@ class MQTTService:
 
         mtype = str(data.get('type', '')).lower()
 
-        # 대시보드 상태 요청
+        # 대시보드 상태 요청: 1.5초 간격 지속 발행 시작
         if mtype == 'get_status':
+            # 즉시 한 번 발행
             handle_get_status(self.client, self.cm, self.fc)
+            # 이미 스트리밍 중이면 무시
+            if not self._status_streaming:
+                self._start_status_stream()
+        # 상태 스트리밍 중단
+        elif mtype == 'get_status_stop':
+            self._stop_status_stream()
         # 관리자 일반 명령 (reboot 등)
         elif mtype == 'command' and msg.topic == self.admin_cmd_topic:
             handle_command(self.client, self.cm, self.fc, data)
@@ -94,10 +110,40 @@ class MQTTService:
         if not self._running:
             return
         self._running = False
+        # 상태 스트리밍 종료
+        try:
+            self._stop_status_stream()
+        except Exception:
+            pass
         try:
             self.client.loop_stop()
             self.client.disconnect()
         except Exception:
             pass
+
+    # ===== 내부: 상태 스트리밍 구현 =====
+    def _start_status_stream(self):
+        self._status_streaming = True
+
+        def _run():
+            while self._status_streaming:
+                try:
+                    handle_get_status(self.client, self.cm, self.fc)
+                except Exception:
+                    pass
+                time.sleep(self._status_interval)
+
+        self._status_thread = threading.Thread(target=_run, daemon=True)
+        self._status_thread.start()
+
+    def _stop_status_stream(self):
+        self._status_streaming = False
+        try:
+            if self._status_thread and self._status_thread.is_alive():
+                # 짧게 대기 후 해제
+                self._status_thread.join(timeout=0.2)
+        except Exception:
+            pass
+        self._status_thread = None
 
 
