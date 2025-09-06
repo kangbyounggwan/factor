@@ -1,5 +1,5 @@
 import json
-from ..topics import topic_status
+from ..topics import topic_status, topic_dash_status
 from core.system_utils import get_pi_serial
 
 
@@ -21,7 +21,7 @@ def build_status(fc):
 def handle_get_status(mqtt_client, cm, fc):
     data = build_status(fc)
     data["equipment_uuid"] = cm.get('equipment.uuid', None)
-    topic = f"dash_status/{get_pi_serial()}"
+    topic = topic_dash_status(get_pi_serial())
     mqtt_client.publish(
         topic,
         json.dumps(data, ensure_ascii=False),

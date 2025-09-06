@@ -51,6 +51,11 @@ class FactorClient:
                 port=port,
                 baudrate=self.printer_baudrate
             )
+            try:
+                # M27 진행률 캐시 공유를 위한 역참조 연결
+                setattr(self.printer_comm, 'factor_client', self)
+            except Exception:
+                pass
         
         # 데이터 저장소
         self.current_data = {}
@@ -656,16 +661,33 @@ class FactorClient:
     
     def get_print_progress(self) -> PrintProgress:
         """프린트 진행률 반환"""
-        # 3D 프린터에서 직접 진행률 정보를 가져오기 어려움
-        # SD 카드 프린팅의 경우 M27 명령으로 가능
-        return PrintProgress(
-            completion=0,
-            file_position=0,
-            file_size=0,
-            print_time=0,
-            print_time_left=0,
-            filament_used=0
-        )
+        # M27 오토리포트/쿼리 기반 캐시 사용
+        try:
+            if self.connected and self.printer_comm:
+                cache = getattr(self, '_sd_progress_cache', None)
+                if cache and cache.get('active'):
+                    printed = int(cache.get('printed_bytes') or 0)
+                    total = int(cache.get('total_bytes') or 0)
+                    completion_pct = float(cache.get('completion') or 0.0)
+                    # 데이터 모델 스펙(0.0~1.0)에 맞춰 환산
+                    completion_ratio = max(0.0, min(1.0, completion_pct / 100.0))
+                    return PrintProgress(
+                        completion=completion_ratio,
+                        file_position=printed,
+                        file_size=total,
+                        print_time=None,
+                        print_time_left=cache.get('eta_sec'),
+                        filament_used=None
+                    )
+                # 캐시가 없으면 1회 조회 트리거
+                try:
+                    self.printer_comm.send_command("M27")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # 기본값
+        return PrintProgress(completion=0.0, file_position=0, file_size=0, print_time=None, print_time_left=None, filament_used=None)
     
     def get_firmware_info(self) -> FirmwareInfo:
         """펌웨어 정보 반환"""
