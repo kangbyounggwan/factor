@@ -486,7 +486,13 @@
                 
                 
                 <div class="log-section">
-                    <h3>시스템 로그</h3>
+                    <h3 style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+                        <span>시스템 로그</span>
+                        <span style="display:flex; gap:8px;">
+                            <button class="btn btn-warning" style="width:auto; padding:8px 12px;" onclick="clearLogs()">로그 초기화</button>
+                            <button class="btn btn-danger" style="width:auto; padding:8px 12px;" onclick="recoverError()">에러 복구</button>
+                        </span>
+                    </h3>
                     <div class="log-container" id="log-container">
                         <div class="log-entry info">시스템 로그를 불러오는 중...</div>
                     </div>
@@ -899,6 +905,38 @@
             
             // 스크롤을 맨 아래로
             container.scrollTop = container.scrollHeight;
+        }
+
+        // 로그 초기화
+        async function clearLogs() {
+            try {
+                const res = await fetch('/api/logs/clear', { method: 'POST' });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    const container = document.getElementById('log-container');
+                    container.innerHTML = '';
+                    addLogEntry('로그를 초기화했습니다.', 'warning');
+                } else {
+                    addLogEntry('로그 초기화 실패: ' + (data.error || res.statusText), 'error');
+                }
+            } catch (e) {
+                addLogEntry('로그 초기화 오류: ' + e.message, 'error');
+            }
+        }
+
+        // 에러 복구(M110 N0 → M105)
+        async function recoverError() {
+            try {
+                const res = await fetch('/api/printer/error/recover', { method: 'POST' });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    addLogEntry('에러 복구 시도 완료 (M110 N0 → M105)', 'warning');
+                } else {
+                    addLogEntry('에러 복구 실패: ' + (data.error || res.statusText), 'error');
+                }
+            } catch (e) {
+                addLogEntry('에러 복구 요청 오류: ' + e.message, 'error');
+            }
         }
 
         // SD 카드 파일 목록 로드

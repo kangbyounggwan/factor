@@ -391,22 +391,73 @@ def health_check():
 
 @api_bp.route('/logs')
 def get_logs():
-    """최근 로그 반환"""
+    """최근 로그 반환 - 에러 로그는 항상 포함"""
     try:
         log_file = '/var/log/factor-client/factor-client.log'
         if not os.path.exists(log_file):
             return jsonify({'logs': []})
-        
-        # 최근 100줄 읽기
+
         with open(log_file, 'r', encoding='utf-8') as f:
             lines = f.readlines()
-            recent_lines = lines[-100:] if len(lines) > 100 else lines
-        
-        return jsonify({'logs': recent_lines})
-        
+
+        # 기본: 최근 300줄
+        recent_limit = 300
+        recent_lines = lines[-recent_limit:] if len(lines) > recent_limit else lines
+
+        # 보장: 최근 에러 50줄 추가 포함(중복 제거)
+        error_lines = [ln for ln in lines if ('ERROR' in ln or 'error' in ln)]
+        extra_errors = error_lines[-50:] if len(error_lines) > 50 else error_lines
+
+        merged = list(recent_lines)
+        seen = set(merged)
+        for ln in extra_errors:
+            if ln not in seen:
+                merged.append(ln)
+                seen.add(ln)
+
+        return jsonify({'logs': merged})
+
     except Exception as e:
         logger.error(f"로그 조회 오류: {e}")
         return jsonify({'error': str(e)}), 500
+
+
+@api_bp.route('/logs/clear', methods=['POST'])
+def clear_logs():
+    """로그 파일 초기화"""
+    try:
+        log_file = '/var/log/factor-client/factor-client.log'
+        # 없으면 생성, 있으면 truncate
+        with open(log_file, 'w', encoding='utf-8'):
+            pass
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f"로그 초기화 오류: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/printer/error/recover', methods=['POST'])
+def recover_printer_error():
+    """프린터 에러 복구 시도: M110 N0 → M105"""
+    try:
+        factor_client = current_app.factor_client
+        if not factor_client or not hasattr(factor_client, 'printer_comm') or not factor_client.printer_comm:
+            return jsonify({'success': False, 'error': 'Factor client or printer not available'}), 503
+        pc = factor_client.printer_comm
+        # 라인 번호 리셋 및 상태 확인
+        try:
+            pc.send_command('M110 N0')
+        except Exception:
+            pass
+        time.sleep(0.2)
+        try:
+            pc.send_command('M105')
+        except Exception:
+            pass
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f"프린터 에러 복구 오류: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @api_bp.route('/printer/type')
