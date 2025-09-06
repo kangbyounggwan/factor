@@ -22,3 +22,6 @@ watchdog>=3.0.0
 
 # Platform specific (install manually if needed)
 # RPi.GPIO>=0.7.1  # Raspberry Pi only 
+
+# MQTT
+paho-mqtt>=1.6.1

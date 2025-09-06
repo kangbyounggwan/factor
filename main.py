@@ -92,6 +92,15 @@ class FactorClientFirmware:
                 self.logger.error("Factor 클라이언트 시작 실패 - 종료합니다")
                 return False
             
+            # MQTT 서비스 시작
+            try:
+                from core.mqtt_service import MQTTService
+                self.mqtt_service = MQTTService(self.config_manager, self.factor_client)
+                self.mqtt_service.start()
+                self.logger.info("MQTT 서비스 시작 완료")
+            except Exception as e:
+                self.logger.warning(f"MQTT 서비스 시작 실패(계속 진행): {e}")
+            
             # 웹 서버 시작
             self._start_web_server()
             
@@ -208,6 +217,12 @@ class FactorClientFirmware:
         self.running = False
         
         try:
+            # MQTT 서비스 중지
+            if hasattr(self, 'mqtt_service') and self.mqtt_service:
+                try:
+                    self.mqtt_service.stop()
+                except Exception:
+                    pass
             # Factor 클라이언트 중지
             if self.factor_client:
                 self.factor_client.stop()

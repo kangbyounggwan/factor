@@ -148,7 +148,16 @@ def get_printer_info() -> Dict[str, Any]:
                                 if src:
                                     printer_info["source_code_url"] = src
 
-                            # 라인별 세부 파싱은 제거 (첫 줄 KV 파서만 사용)
+                            # ===== UUID를 설정 파일에 저장(변경 시 갱신) =====
+                            try:
+                                cm = ConfigManager()
+                                old_uuid = cm.get('equipment.uuid', None)
+                                new_uuid = printer_info.get('uuid')
+                                if new_uuid and new_uuid != old_uuid:
+                                    cm.set('equipment.uuid', new_uuid)
+                                    cm.save_config()
+                            except Exception as e:
+                                logging.getLogger('ble-gatt').warning(f"설비 UUID 저장 실패: {e}")
                             
                             # MACHINE_TYPE이 없으면 FIRMWARE_NAME에서 모델명 추출 시도
                             if not printer_info.get("model") or printer_info["model"] == "Unknown":
@@ -292,7 +301,8 @@ def get_software_info() -> Dict[str, Any]:
         "firmware_version": "1.0.0",
         "api_version": "1.0.0",
         "last_update": datetime.now().isoformat() + "Z",
-        "update_available": False
+        "update_available": False,
+        "uuid": None
     }
     
     try:
@@ -330,6 +340,23 @@ def get_software_info() -> Dict[str, Any]:
             software_info["system"]["os"] = f"{platform.system()} {platform.release()}"
         except Exception:
             software_info["system"]["os"] = "Unknown"
+        
+        # 라즈베리파이 고유 시리얼을 uuid로 설정
+        try:
+            serial_paths = [
+                "/proc/device-tree/serial-number",
+                "/sys/firmware/devicetree/base/serial-number"
+            ]
+            for spath in serial_paths:
+                if os.path.exists(spath):
+                    with open(spath, "rb") as f:
+                        raw = f.read()
+                        value = raw.decode("utf-8", "ignore").replace("\x00", "").strip()
+                        if value:
+                            software_info["uuid"] = value
+                            break
+        except Exception as e:
+            logging.getLogger('ble-gatt').warning(f"RPi serial-number 읽기 실패: {e}")
         
         # Factor Client 버전 정보
         try:

@@ -107,3 +107,12 @@ system:
   storage:
     enable_readonly_root: true
     log_to_ram: true
+
+
+mqtt:
+  host: 192.168.200.105
+  port: 1883
+  username: ""
+  password: ""
+  tls: false
+  topic_prefix: "factor"

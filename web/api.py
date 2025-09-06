@@ -56,13 +56,15 @@ def get_status():
                 pos_dict = pc.current_position.to_dict()
             except Exception:
                 pos_dict = {'x': 0, 'y': 0, 'z': 0, 'e': 0}
-            # 설비 UUID 정보 가져오기 (업로드 보호 중)
-            equipment_uuid = None
+            # 설비 UUID 정보 가져오기 (설정 파일에서 우선 로드)
             try:
-                if hasattr(pc, '_last_printer_info') and pc._last_printer_info:
-                    equipment_uuid = pc._last_printer_info.get('uuid')
+                cm = getattr(current_app, 'config_manager', None)
+                if cm is None:
+                    from core.config_manager import ConfigManager
+                    cm = ConfigManager()
+                equipment_uuid = cm.get('equipment.uuid', None)
             except Exception:
-                pass
+                equipment_uuid = None
             
             status_data = {
                 'printer_status': factor_client.get_printer_status().to_dict(),
@@ -75,15 +77,15 @@ def get_status():
                 'equipment_uuid': equipment_uuid
             }
         else:
-            # 설비 UUID 정보 가져오기
-            equipment_uuid = None
+            # 설비 UUID 정보 가져오기 (설정 파일에서 우선 로드)
             try:
-                if hasattr(factor_client, 'printer_comm') and factor_client.printer_comm:
-                    pc = factor_client.printer_comm
-                    if hasattr(pc, '_last_printer_info') and pc._last_printer_info:
-                        equipment_uuid = pc._last_printer_info.get('uuid')
+                cm = getattr(current_app, 'config_manager', None)
+                if cm is None:
+                    from core.config_manager import ConfigManager
+                    cm = ConfigManager()
+                equipment_uuid = cm.get('equipment.uuid', None)
             except Exception:
-                pass
+                equipment_uuid = None
             
             status_data = {
                 'printer_status': factor_client.get_printer_status().to_dict(),
@@ -109,8 +111,8 @@ def get_status():
         except Exception:
             pass
 
+
         
-        status_data['equipment_uuid'] = equipment_uuid
         return jsonify(status_data)
         
     except Exception as e:
