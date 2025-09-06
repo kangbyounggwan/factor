@@ -438,22 +438,42 @@ def clear_logs():
 
 @api_bp.route('/printer/error/recover', methods=['POST'])
 def recover_printer_error():
-    """프린터 에러 복구 시도: M110 N0 → M105"""
+    """프린터 에러 복구 시도: USB 세션 재오픈(Disconnect → Reconnect) 후 상태 확인"""
     try:
         factor_client = current_app.factor_client
         if not factor_client or not hasattr(factor_client, 'printer_comm') or not factor_client.printer_comm:
             return jsonify({'success': False, 'error': 'Factor client or printer not available'}), 503
         pc = factor_client.printer_comm
-        # 라인 번호 리셋 및 상태 확인
+
+        # 1) 현재 세션 닫기
         try:
-            pc.send_command('M110 N0')
+            pc.disconnect()
+        except Exception as e:
+            logger.warning(f"recover: disconnect 경고: {e}")
+
+        # 2) 잠시 대기 후 재연결 시도
+        try:
+            time.sleep(1.5)
         except Exception:
             pass
-        time.sleep(0.2)
+
+        ok = False
+        try:
+            ok = factor_client._connect_to_printer()
+            factor_client.connected = bool(ok)
+        except Exception as e:
+            logger.error(f"recover: reconnect 오류: {e}")
+            ok = False
+
+        if not ok:
+            return jsonify({'success': False, 'error': 'Reconnect failed'}), 500
+
+        # 3) 상태 확인(M105)
         try:
             pc.send_command('M105')
         except Exception:
             pass
+
         return jsonify({'success': True})
     except Exception as e:
         logger.error(f"프린터 에러 복구 오류: {e}")
