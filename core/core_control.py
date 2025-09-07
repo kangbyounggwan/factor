@@ -64,7 +64,9 @@ class ControlModule:
 
         try:
             pc.logger.info(f"프린터 연결 시도: {pc.port}@{pc.baudrate}")
-            pc._set_state(pc.state.__class__.CONNECTING)
+            # 지연 임포트로 순환 참조 회피
+            from .printer_comm import PrinterState
+            pc._set_state(PrinterState.CONNECTING)
 
             # 비동기 송신 기능 제거됨
 
@@ -97,65 +99,18 @@ class ControlModule:
             pc.send_thread = threading.Thread(target=pc._send_worker, daemon=True)
             pc.read_thread.start(); pc.send_thread.start()
             pc.connected = True
-            pc._set_state(pc.state.__class__.OPERATIONAL)
+            from .printer_comm import PrinterState
+            pc._set_state(PrinterState.OPERATIONAL)
             pc._initialize_printer()
             pc.logger.info("프린터 연결 완료")
-            # 연결 직후: 온도 오토리포트(M155 S1) 1회 시도 후 ok면 설정에 기록
-            try:
-                # FactorClient 및 ConfigManager 접근
-                fc = getattr(self.pc, 'factor_client', None)
-                cm = getattr(fc, 'config', None) if fc else None
-                already = False
-                try:
-                    already = bool(cm.get('data_collection.auto_report', False)) if cm else False
-                except Exception:
-                    already = False
-
-                if not already:
-                    resp = self.send_command_and_wait("M155 S1", timeout=3.0)
-                    if resp and 'ok' in str(resp).lower():
-                        try:
-                            setattr(self.pc, '_last_temp_time', time.time())
-                        except Exception:
-                            pass
-                        if cm:
-                            try:
-                                cm.mark_auto_report_supported(True)
-                            except Exception:
-                                pass
-                # 지원되는 경우 세션 시작과 함께 온도/위치 오토리포트 활성화
-                try:
-                    supports = bool(cm.get('data_collection.auto_report', False)) if cm else False
-                except Exception:
-                    supports = False
-                if supports and not bool(getattr(self.pc, '_auto_report_active', False)):
-                    try:
-                        # 온도 오토리포트 ON
-                        self.send_command_and_wait("M155 S1", timeout=2.0)
-                    except Exception:
-                        pass
-                    try:
-                        # 위치 오토리포트 ON (펌웨어 지원 시)
-                        self.send_command_and_wait("M154 S1", timeout=2.0)
-                    except Exception:
-                        pass
-                    try:
-                        # SD 진행률 오토리포트 ON (펌웨어 지원 시)
-                        self.send_command_and_wait("M27 S1", timeout=2.0)
-                    except Exception:
-                        pass
-                    try:
-                        setattr(self.pc, '_auto_report_active', True)
-                    except Exception:
-                        pass
-            except Exception:
-                # 미지원/타임아웃 등은 무시하고 정상 연결만 유지
-                pass
+            # 연결 직후 오토리포트 설정 시도(분리 메서드)
+            self._maybe_enable_auto_reports()
             return True
 
         except Exception as e:
             pc.logger.error(f"프린터 연결 실패: {e}")
-            pc._set_state(pc.state.__class__.ERROR)
+            from .printer_comm import PrinterState
+            pc._set_state(PrinterState.ERROR)
             return False
 
     def disconnect(self):
@@ -181,8 +136,54 @@ class ControlModule:
             pc.serial_conn.close()
 
         pc.connected = False
-        pc._set_state(pc.state.__class__.DISCONNECTED)
+        from .printer_comm import PrinterState
+        pc._set_state(PrinterState.DISCONNECTED)
         pc.logger.info("프린터 연결 해제 완료")
+
+    # ===== 오토리포트 설정 분리 =====
+    def _maybe_enable_auto_reports(self):
+        pc = self.pc
+        try:
+            fc = getattr(pc, 'factor_client', None)
+            cm = getattr(fc, 'config', None) if fc else None
+            already = False
+            try:
+                already = bool(cm.get('data_collection.auto_report', False)) if cm else False
+            except Exception:
+                already = False
+
+            # 지원 여부 미기록 시 한 번 시도하여 지원 확인
+            if not already:
+                resp = self.send_command_and_wait("M155 S1", timeout=3.0)
+                if resp and 'ok' in str(resp).lower():
+                    try:
+                        setattr(pc, '_last_temp_time', time.time())
+                    except Exception:
+                        pass
+                    if cm:
+                        try:
+                            cm.mark_auto_report_supported(True)
+                        except Exception:
+                            pass
+
+            # 지원되는 경우 세션용 오토리포트 활성화
+            try:
+                supports = bool(cm.get('data_collection.auto_report', False)) if cm else False
+            except Exception:
+                supports = False
+            if supports and not bool(getattr(pc, '_auto_report_active', False)):
+                for cmd in ("M155 S1", "M154 S1", "M27 S1"):
+                    try:
+                        self.send_command_and_wait(cmd, timeout=2.0)
+                    except Exception:
+                        pass
+                try:
+                    setattr(pc, '_auto_report_active', True)
+                except Exception:
+                    pass
+        except Exception:
+            # 미지원/타임아웃 등은 무시
+            pass
 
     # ===== 전송 =====
     def send_command(self, command: str, priority: bool = False) -> bool:
@@ -237,8 +238,8 @@ class ControlModule:
                 pc.logger.debug(f"[SYNC_TX] {command!r}")
                 pc.serial_conn.write(f"{command}\n".encode("utf-8"))
                 pc.serial_conn.flush()
-                end = time.time() + timeout
-                while time.time() < end:
+                deadline = time.monotonic() + timeout
+                while time.monotonic() < deadline:
                     line_bytes = pc.serial_conn.readline()
                     if line_bytes:
                         line = line_bytes.decode("utf-8", errors="ignore").strip()
@@ -273,7 +274,9 @@ class ControlModule:
                                     if command == "M114" and ("X:" in p or p.lower().startswith("ok")):
                                         return p
                                     pc.last_response = p
-                        time.sleep(0.05)
+                        # monotonic 기반 슬립
+                        remaining = deadline - time.monotonic()
+                        time.sleep(0.05 if remaining > 0.05 else max(0.0, remaining))
                 if pc.last_response:
                     return pc.last_response
                 pc.logger.warning(f"명령 '{command}' 응답 타임아웃 ({timeout}초)")

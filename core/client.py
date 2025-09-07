@@ -718,17 +718,16 @@ class FactorClient:
     
     def get_print_progress(self) -> PrintProgress:
         """프린트 진행률 반환"""
-        # M27 오토리포트/쿼리 기반 캐시 사용
         try:
             if self.connected and self.printer_comm:
                 cache = getattr(self, '_sd_progress_cache', None)
-                if cache and cache.get('active'):
+                if cache:
                     printed = int(cache.get('printed_bytes') or 0)
                     total = int(cache.get('total_bytes') or 0)
                     completion_pct = float(cache.get('completion') or 0.0)
-                    # 데이터 모델 스펙(0.0~1.0)에 맞춰 환산
                     completion_ratio = max(0.0, min(1.0, completion_pct / 100.0))
                     return PrintProgress(
+                        active=bool(cache.get('active')),
                         completion=completion_ratio,
                         file_position=printed,
                         file_size=total,
@@ -744,7 +743,7 @@ class FactorClient:
         except Exception:
             pass
         # 기본값
-        return PrintProgress(completion=0.0, file_position=0, file_size=0, print_time=None, print_time_left=None, filament_used=None)
+        return PrintProgress(active=False, completion=0.0, file_position=0, file_size=0)
     
     def get_firmware_info(self) -> FirmwareInfo:
         """펌웨어 정보 반환"""

@@ -80,6 +80,7 @@ class Position:
 @dataclass
 class PrintProgress:
     """프린트 진행률"""
+    active: bool = False  # 현재 프린팅 중인지 여부
     completion: Optional[float] = None  # 0.0 ~ 1.0
     file_position: Optional[int] = None  # byte
     file_size: Optional[int] = None  # byte
@@ -90,6 +91,7 @@ class PrintProgress:
     
     def to_dict(self) -> Dict[str, Any]:
         return {
+            'active': self.active,
             'completion': self.completion,
             'file_position': self.file_position,
             'file_size': self.file_size,
