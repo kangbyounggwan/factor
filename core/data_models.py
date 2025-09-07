@@ -101,6 +101,16 @@ class PrintProgress:
 
 
 @dataclass
+class GCodeResponse:
+    """G-code 명령 응답 래퍼"""
+    command: str
+    response: str
+    timestamp: float
+    success: bool
+    error_message: Optional[str] = None
+
+
+@dataclass
 class PrinterInfo:
     """기타 프린터 정보"""
     feedrate: Optional[float] = None  # mm/min
@@ -130,17 +140,42 @@ class PrinterInfo:
 @dataclass
 class FirmwareInfo:
     """펌웨어 정보"""
-    type: Optional[str] = None
+    # 기존 호환 필드
+    type: Optional[str] = None  # 호환성 유지: firmware_name과 동일 의미로 사용
     version: Optional[str] = None
     capabilities: List[str] = field(default_factory=list)
     sensor_support: Dict[str, bool] = field(default_factory=dict)
+    # 통합 필드(PrinterTypeInfo + FirmwareInfo)
+    firmware_name: Optional[str] = None
+    firmware_type: Optional[str] = None
+    printer_type: Optional[str] = None
     
     def to_dict(self) -> Dict[str, Any]:
         return {
-            'type': self.type,
+            'type': self.type,  # backward-compatible
             'version': self.version,
             'capabilities': self.capabilities,
-            'sensor_support': self.sensor_support
+            'sensor_support': self.sensor_support,
+            'firmware_name': self.firmware_name or self.type,
+            'firmware_type': self.firmware_type,
+            'printer_type': self.printer_type,
+        }
+
+
+@dataclass
+class PrinterTypeInfo:
+    """프린터/펌웨어 타입 요약 정보"""
+    printer_type: str
+    firmware_type: str
+    firmware_name: str
+    firmware_version: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'printer_type': self.printer_type,
+            'firmware_type': self.firmware_type,
+            'firmware_name': self.firmware_name,
+            'firmware_version': self.firmware_version,
         }
 
 

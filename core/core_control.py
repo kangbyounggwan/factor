@@ -69,7 +69,6 @@ class ControlModule:
             # 비동기 송신 기능 제거됨
 
             # Fallback: 동기 시리얼
-            pc.logger.info("pyserial-asyncio 미설치 → 동기 시리얼 모드로 동작")
             pc.serial_conn = serial.Serial(
                 port=pc.port,
                 baudrate=pc.baudrate,
@@ -101,6 +100,57 @@ class ControlModule:
             pc._set_state(pc.state.__class__.OPERATIONAL)
             pc._initialize_printer()
             pc.logger.info("프린터 연결 완료")
+            # 연결 직후: 온도 오토리포트(M155 S1) 1회 시도 후 ok면 설정에 기록
+            try:
+                # FactorClient 및 ConfigManager 접근
+                fc = getattr(self.pc, 'factor_client', None)
+                cm = getattr(fc, 'config', None) if fc else None
+                already = False
+                try:
+                    already = bool(cm.get('data_collection.auto_report', False)) if cm else False
+                except Exception:
+                    already = False
+
+                if not already:
+                    resp = self.send_command_and_wait("M155 S1", timeout=3.0)
+                    if resp and 'ok' in str(resp).lower():
+                        try:
+                            setattr(self.pc, '_last_temp_time', time.time())
+                        except Exception:
+                            pass
+                        if cm:
+                            try:
+                                cm.mark_auto_report_supported(True)
+                            except Exception:
+                                pass
+                # 지원되는 경우 세션 시작과 함께 온도/위치 오토리포트 활성화
+                try:
+                    supports = bool(cm.get('data_collection.auto_report', False)) if cm else False
+                except Exception:
+                    supports = False
+                if supports and not bool(getattr(self.pc, '_auto_report_active', False)):
+                    try:
+                        # 온도 오토리포트 ON
+                        self.send_command_and_wait("M155 S1", timeout=2.0)
+                    except Exception:
+                        pass
+                    try:
+                        # 위치 오토리포트 ON (펌웨어 지원 시)
+                        self.send_command_and_wait("M154 S1", timeout=2.0)
+                    except Exception:
+                        pass
+                    try:
+                        # SD 진행률 오토리포트 ON (펌웨어 지원 시)
+                        self.send_command_and_wait("M27 S1", timeout=2.0)
+                    except Exception:
+                        pass
+                    try:
+                        setattr(self.pc, '_auto_report_active', True)
+                    except Exception:
+                        pass
+            except Exception:
+                # 미지원/타임아웃 등은 무시하고 정상 연결만 유지
+                pass
             return True
 
         except Exception as e:

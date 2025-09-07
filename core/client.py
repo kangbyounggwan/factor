@@ -34,30 +34,24 @@ class FactorClient:
         self.printer_baudrate = printer_config.get('baudrate', 115200)
         self.auto_detect = printer_config.get('auto_detect', True)
         self.firmware_type = printer_config.get('firmware_type', 'auto')
-        self.simulation_mode = printer_config.get('simulation_mode', False)
         
         # 폴링 간격
         self.temp_poll_interval = printer_config.get('temp_poll_interval', 5.0)
         self.position_poll_interval = printer_config.get('position_poll_interval', 10.0)
         
-        # 시뮬레이션 모드이거나 포트가 비어있으면 프린터 통신 없이 진행
-        if self.simulation_mode or not self.printer_port:
-            self.logger.info("시뮬레이션 모드로 실행합니다.")
-            self.printer_comm: Optional[PrinterCommunicator] = None
-        else:
-            # 프린터 통신 객체
-            port = self.printer_port if not self.auto_detect else ""
-            self.printer_comm = PrinterCommunicator(
-                port=port,
-                baudrate=self.printer_baudrate
-            )
-            try:
-                # M27 진행률 캐시 공유를 위한 역참조 연결
-                setattr(self.printer_comm, 'factor_client', self)
-            except Exception:
-                pass
+        # 프린터 통신 객체 (항상 실제 연결 시도)
+        port = self.printer_port if not self.auto_detect else ""
+        self.printer_comm = PrinterCommunicator(
+            port=port,
+            baudrate=self.printer_baudrate
+        )
+        try:
+            # M27 진행률 캐시 공유를 위한 역참조 연결
+            setattr(self.printer_comm, 'factor_client', self)
+        except Exception:
+            pass
         
-        # 데이터 저장소
+        # 데이터 저장소(콜백 중심; 큐 제거)
         self.current_data = {}
         self.temperature_history = []
         self.position_data = Position(0, 0, 0, 0)
@@ -81,8 +75,7 @@ class FactorClient:
         self.last_gcode_response = time.time()       # G-code 응답
         self.last_state_response = time.time()       # 상태 변경
         
-        # 스레드 및 큐
-        self.data_queue = Queue()
+        # 스레드(큐 삭제)
         self.worker_threads = []
         self.polling_threads = []
         
@@ -99,7 +92,7 @@ class FactorClient:
             'on_gcode_response': []
         }
         
-        # 프린터 콜백 등록 (시뮬레이션 모드가 아닐 때만)
+        # 프린터 콜백 등록
         if self.printer_comm:
             self.printer_comm.add_callback('on_state_change', self._on_printer_state_change)
             self.printer_comm.add_callback('on_temperature_update', self._on_temperature_update)
@@ -230,11 +223,6 @@ class FactorClient:
     
     def _start_worker_threads(self):
         """워커 스레드 시작"""
-        # 데이터 처리 스레드
-        data_thread = threading.Thread(target=self._data_worker, daemon=True)
-        data_thread.start()
-        self.worker_threads.append(data_thread)
-        
         # 시스템 모니터링 스레드
         monitor_thread = threading.Thread(target=self._system_monitor_worker, daemon=True)
         monitor_thread.start()
@@ -257,30 +245,117 @@ class FactorClient:
         self.logger.info("폴링 스레드 시작 완료")
     
     def _temperature_polling_worker(self):
-        """온도 폴링 워커"""
+        """
+        온도 폴링 워커
+        - 오토리포트 우선(M155 S1). 끊기면 재암시 → M105 1회 폴백 → 폴링 전환
+        - 정확한 주기 유지(monotonic + 처리시간 보정)
+        - 약간의 지터로 경합 완화
+        """
+        interval = float(getattr(self, "temp_poll_interval", 1.0))
+        fresh_thresh = max(2.0, 3.0 * interval)   # 최근 응답 허용 시간
+        reassert_gap = max(3.0, 2.0 * interval)   # 재암시 간격
+        last_reassert = 0.0
+        next_ts = time.monotonic()
+
         while self.running and self.connected:
+            now = time.time()
             try:
-                # 온도 정보 요청
-                if self.printer_comm:
-                    self.printer_comm.send_command("M105")
-                time.sleep(self.temp_poll_interval)
-                
+                auto_report = bool(self.config.get('data_collection.auto_report', False))
+                # 최근 온도 응답이 신선한가?
+                last_rx = float(getattr(self, "last_temperature_response", 0.0) or 0.0)
+                fresh = (now - last_rx) <= fresh_thresh
+
+                if auto_report:
+                    if not fresh:
+                        # 오토리포트가 켜져있다고 믿는데 데이터가 끊김 → 재암시 시도
+                        if (now - last_reassert) > reassert_gap and self.printer_comm and self.printer_comm.connected:
+                            self.logger.debug("[temp] auto-report stale → M155 S1 re-assert")
+                            try:
+                                self.printer_comm.send_command("M155 S1")
+                            except Exception:
+                                pass
+                            last_reassert = now
+
+                        # 빠른 복구를 위해 1회 폴백 질의
+                        if self.printer_comm and self.printer_comm.connected:
+                            self.printer_comm.send_command("M105")
+                        # 연속으로 오래 끊기면 폴링 모드로 전환
+                        if (now - last_rx) > (2.0 * fresh_thresh):
+                            self.logger.warning("[temp] auto-report fallback → polling mode")
+                            try:
+                                self.config.set("data_collection.auto_report", False)
+                            except Exception:
+                                pass
+                    # fresh면 아무 것도 안 보냄 (오토리포트 수신 대기)
+                else:
+                    # 폴링 모드
+                    if self.printer_comm and self.printer_comm.connected:
+                        self.printer_comm.send_command("M105")
+
             except Exception as e:
-                self.logger.error(f"온도 폴링 오류: {e}")
-                time.sleep(self.temp_poll_interval)
+                self.logger.warning(f"[temp-poll] error: {e}", exc_info=True)
+
+            # 다음 틱 예약(정확 주기 + 지터)
+            next_ts += interval
+            sleep_for = max(0.0, next_ts - time.monotonic()) + random.uniform(0, min(0.05, 0.2 * interval))
+            # 루프 종료 신호/상태 확인
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+            if not (self.running and self.connected):
+                break
+
     
     def _position_polling_worker(self):
-        """위치 폴링 워커"""
+        """
+        위치 폴링 워커
+        - 오토리포트가 True면 우선 스킵.
+        * 끊기면 M154 S1(지원 시) 재암시 → M114 1회 폴백 → 계속 끊기면 폴링 모드 유지
+        - 정확한 주기 유지(monotonic + 처리시간 보정)
+        """
+        interval = float(getattr(self, "position_poll_interval", 2.0))
+        fresh_thresh = max(2.0, 3.0 * interval)
+        reassert_gap = max(3.0, 2.0 * interval)
+        last_reassert = 0.0
+        next_ts = time.monotonic()
+
         while self.running and self.connected:
+            now = time.time()
             try:
-                # 위치 정보 요청
-                if self.printer_comm:
-                    self.printer_comm.send_command("M114")
-                time.sleep(self.position_poll_interval)
-                
+                auto_report = bool(self.config.get('data_collection.auto_report', False))
+                last_rx = float(getattr(self, "last_position_response", 0.0) or 0.0)
+                fresh = (now - last_rx) <= fresh_thresh
+
+                if auto_report:
+                    if not fresh:
+                        # 위치 오토리포트 재암시 (펌웨어가 지원할 때만; 미지원이어도 무해)
+                        if (now - last_reassert) > reassert_gap and self.printer_comm and self.printer_comm.connected:
+                            self.logger.debug("[pos] auto-report stale → try M154 S1 (if supported)")
+                            try:
+                                self.printer_comm.send_command("M154 S1")
+                            except Exception:
+                                pass
+                            last_reassert = now
+
+                        # 1회 폴백 질의
+                        if self.printer_comm and self.printer_comm.connected:
+                            self.printer_comm.send_command("M114")
+
+                        # 온도와 달리 위치는 상시 오토리포트 미보장 → 굳이 auto_report False로 내리지 않음
+                        # (온도 auto_report는 유지하면서 위치만 폴링으로 커버)
+                else:
+                    if self.printer_comm and self.printer_comm.connected:
+                        self.printer_comm.send_command("M114")
+
             except Exception as e:
-                self.logger.error(f"위치 폴링 오류: {e}")
-                time.sleep(self.position_poll_interval)
+                self.logger.error(f"[pos-poll] error: {e}", exc_info=True)
+
+            # 다음 틱 예약(정확 주기 + 지터)
+            next_ts += interval
+            sleep_for = max(0.0, next_ts - time.monotonic()) + random.uniform(0, min(0.05, 0.2 * interval))
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+            if not (self.running and self.connected):
+                break
     
     def _start_watchdog(self):
         """워치독 스레드 시작"""
@@ -490,24 +565,6 @@ class FactorClient:
         except Exception as e:
             self.logger.error(f"프린터 재연결 중 오류: {e}")
     
-    def _data_worker(self):
-        """데이터 처리 워커"""
-        while self.running:
-            try:
-                # 큐에서 데이터 가져오기
-                try:
-                    data_type, data = self.data_queue.get(timeout=1)
-                except Empty:
-                    continue
-                
-                # 데이터 타입별 처리
-                if data_type == 'printer_data':
-                    self._process_printer_data(data)
-                
-                self.data_queue.task_done()
-                
-            except Exception as e:
-                self.logger.error(f"데이터 처리 워커 오류: {e}")
     
     def _system_monitor_worker(self):
         """시스템 모니터링 워커"""

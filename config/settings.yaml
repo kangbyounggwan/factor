@@ -3,7 +3,6 @@ server:
   port: 8080
   debug: true
 printer:
-  simulation_mode: false
   auto_detect: true
   port: /dev/ttyUSB0
   baudrate: 115200
@@ -43,7 +42,6 @@ camera:
   stream_url: ''
   snapshot_url: ''
 printer:
-  simulation_mode: false
   auto_detect: true
   port: /dev/ttyUSB0
   baudrate: 115200

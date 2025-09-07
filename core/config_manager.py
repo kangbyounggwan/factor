@@ -28,7 +28,7 @@ class ConfigFileHandler(FileSystemEventHandler):
 class ConfigManager:
     """설정 관리자 클래스"""
     
-    def __init__(self, config_path: str = "config/settings.yaml"):
+    def __init__(self, config_path: str = "config/settings_rpi.yaml"):
         self.config_path = Path(config_path)
         self.config_data = {}
         self.logger = logging.getLogger(__name__)
@@ -42,7 +42,6 @@ class ConfigManager:
                 'debug': False
             },
             'printer': {
-                'simulation_mode': False,
                 'auto_detect': True,
                 'port': '',
                 'baudrate': 115200,
@@ -141,7 +140,6 @@ class ConfigManager:
         env_mappings = {
             'FACTOR_PRINTER_PORT': ['printer', 'port'],
             'FACTOR_PRINTER_BAUDRATE': ['printer', 'baudrate'],
-            'FACTOR_PRINTER_SIMULATION': ['printer', 'simulation_mode'],
             'FACTOR_SERVER_HOST': ['server', 'host'],
             'FACTOR_SERVER_PORT': ['server', 'port'],
             'FACTOR_LOG_LEVEL': ['logging', 'level'],
@@ -251,6 +249,38 @@ class ConfigManager:
         except Exception as e:
             self.logger.error(f"설정 파일 저장 실패: {e}")
             raise
+
+    # ===== 프로젝트 전역에서 사용하는 설정 조작 헬퍼 =====
+    def mark_auto_report_supported(self, enabled: bool = True) -> None:
+        """오토리포트 지원 여부를 설정 파일에 반영하고 저장"""
+        try:
+            self.set('data_collection.auto_report', bool(enabled))
+            self.save_config()
+            try:
+                self.logger.info(f"data_collection.auto_report={bool(enabled)} 저장 완료")
+            except Exception:
+                pass
+        except Exception as e:
+            self.logger.error(f"오토리포트 설정 저장 실패: {e}")
+
+    def update_equipment_uuid(self, new_uuid: Optional[str]) -> bool:
+        """설비 UUID를 갱신하고 변경 시 저장. 변경되었으면 True 반환"""
+        try:
+            if not new_uuid:
+                return False
+            old_uuid = self.get('equipment.uuid', None)
+            if new_uuid != old_uuid:
+                self.set('equipment.uuid', new_uuid)
+                self.save_config()
+                try:
+                    self.logger.info(f"equipment.uuid 갱신: {old_uuid} -> {new_uuid}")
+                except Exception:
+                    pass
+                return True
+            return False
+        except Exception as e:
+            self.logger.error(f"equipment.uuid 저장 실패: {e}")
+            return False
     
     def start_watching(self):
         """설정 파일 변경 감지 시작"""
@@ -281,14 +311,9 @@ class ConfigManager:
             'server.port'
         ]
         
-        # OctoPrint 설정은 선택사항 (시뮬레이션 모드에서는 불필요)
         printer_config = self.get('printer', {})
-        simulation_mode = printer_config.get('simulation_mode', False)
-        
-        if not simulation_mode:
-            # 실제 프린터 연결 모드에서는 프린터 설정 확인
-            if not printer_config.get('port') and not printer_config.get('auto_detect'):
-                self.logger.warning("프린터 포트가 설정되지 않았습니다. auto_detect를 true로 설정하거나 port를 지정하세요.")
+        if not printer_config.get('port') and not printer_config.get('auto_detect'):
+            self.logger.warning("프린터 포트가 설정되지 않았습니다. auto_detect를 true로 설정하거나 port를 지정하세요.")
         
         for field in required_fields:
             if not self.get(field):

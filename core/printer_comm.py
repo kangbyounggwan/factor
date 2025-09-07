@@ -59,6 +59,8 @@ class GCodeResponse:
     error_message: Optional[str] = None
 
 
+
+
 class PrinterCommunicator:
     """3D 프린터 직접 통신 클래스"""
     
@@ -158,14 +160,7 @@ class PrinterCommunicator:
             except Exception as e:
                 self.logger.error(f"콜백 실행 오류 ({event_type}): {e}")
     
-    def connect(self, port: Optional[str] = None, baudrate: Optional[int] = None) -> bool:
-        """프린터 연결 - 제어 모듈 위임"""
-        return self.control.connect(port, baudrate)
-    
-    def disconnect(self):
-        """프린터 연결 해제 - 제어 모듈 위임"""
-        return self.control.disconnect()
-    
+
     def _auto_detect_port(self) -> Optional[str]:
         """프린터 포트 자동 감지"""
         import serial.tools.list_ports
@@ -320,106 +315,6 @@ class PrinterCommunicator:
                 self.logger.error(f"시리얼 전송 오류: {e}")
                 time.sleep(1)
     
-    def _process_response(self, line: str):
-        """응답 처리 - 데이터 취득 모듈 위임"""
-        return self.collector.process_response(line)
-    
-    def _parse_temperature(self, line: str) -> bool:
-        """온도 정보 파싱 (Marlin 스타일: ok T:25.2 /0.0 B:24.3 /0.0 @:0 B@:0)"""
-        # 우선 간단 패턴으로 빠르게 파싱
-        # 노즐(툴0)
-        t_match = re.search(r"T:\s*(-?\d+\.?\d*)\s*/\s*(-?\d+\.?\d*)", line)
-        # 베드
-        b_match = re.search(r"B:\s*(-?\d+\.?\d*)\s*/\s*(-?\d+\.?\d*)", line)
-
-        tools = {}
-        bed = None
-        chamber = None
-
-        if t_match:
-            actual = float(t_match.group(1))
-            target = float(t_match.group(2))
-            tools["tool0"] = TemperatureData(actual=actual, target=target)
-
-        if b_match:
-            actual = float(b_match.group(1))
-            target = float(b_match.group(2))
-            bed = TemperatureData(actual=actual, target=target)
-
-        # 확장 패턴(여러 툴, 챔버)이 필요한 경우 기존 정규식도 시도
-        if not tools and not bed:
-            matches = self.temp_pattern.findall(line)
-            for match in matches:
-                sensor_type, sensor_num, actual, target = match
-                actual = float(actual); target = float(target)
-                td = TemperatureData(actual=actual, target=target)
-                if sensor_type == 'T':
-                    tool_name = f"tool{sensor_num}" if sensor_num else "tool0"
-                    tools[tool_name] = td
-                elif sensor_type == 'B':
-                    bed = td
-                elif sensor_type == 'C':
-                    chamber = td
-
-        if tools or bed or chamber:
-            temp_info = TemperatureInfo(tool=tools, bed=bed, chamber=chamber)
-            # 캐시 및 콜백
-            self._last_temp_info = temp_info
-            self._trigger_callback('on_temperature_update', temp_info)
-            return True
-
-        return False
-    
-    def _parse_position(self, line: str) -> bool:
-        """위치 정보 파싱"""
-        if not line.startswith('X:'):
-            return False
-        
-        matches = self.position_pattern.findall(line)
-        if not matches:
-            return False
-        
-        position_data = {}
-        for axis, value in matches:
-            position_data[axis.lower()] = float(value)
-        
-        if position_data:
-            self.current_position = Position(
-                x=position_data.get('x', 0),
-                y=position_data.get('y', 0),
-                z=position_data.get('z', 0),
-                e=position_data.get('e', 0)
-            )
-            self._trigger_callback('on_position_update', self.current_position)
-            return True
-        
-        return False
-    
-    def _parse_firmware_info(self, line: str) -> bool:
-        """펌웨어 정보 파싱"""
-        if line.startswith('FIRMWARE_NAME:'):
-            # Marlin 스타일
-            parts = line.split()
-            for part in parts:
-                if part.startswith('FIRMWARE_NAME:'):
-                    self.firmware_name = part.split(':')[1]
-                elif part.startswith('FIRMWARE_VERSION:'):
-                    self.firmware_version = part.split(':')[1]
-            return True
-        
-        if 'Klipper' in line:
-            self.firmware_name = "Klipper"
-            return True
-        
-        if 'RepRapFirmware' in line:
-            self.firmware_name = "RepRapFirmware"
-            return True
-        
-        return False
-    
-    def send_command(self, command: str, priority: bool = False):
-        """G-code 명령 전송 - 제어 모듈 위임"""
-        return self.control.send_command(command, priority)
     
     def _insert_priority_command(self, command: str):
         """우선순위 명령을 큐 앞쪽에 삽입"""
@@ -436,32 +331,20 @@ class PrinterCommunicator:
         for cmd in temp_commands:
             self.command_queue.put(cmd)
     
-    def send_command_and_wait(self, command: str, timeout: float = 8.0) -> Optional[str]:
-        """동기 전송/대기 - 제어 모듈 위임"""
-        return self.control.send_command_and_wait(command, timeout)
-
-    def send_gcode(self, command: str, wait: bool = False, timeout: float = 8.0) -> bool:
-        """G-code 전송 - 제어 모듈 위임"""
-        return self.control.send_gcode(command, wait, timeout)
-    
-    def get_temperature_info(self) -> TemperatureInfo:
-        """현재 온도 정보 반환 - 데이터 취득 모듈 위임"""
-        return self.collector.get_temperature_info()
-    
-    def get_position(self) -> Position:
-        """현재 위치 정보 반환 - 데이터 취득 모듈 위임"""
-        return self.collector.get_position()
     
     def get_printer_status(self) -> PrinterStatus:
         """프린터 상태 반환"""
         return self._create_printer_status(self.state)
     
     def get_firmware_info(self) -> FirmwareInfo:
-        """펌웨어 정보 반환"""
+        """펌웨어/타입 통합 정보 반환"""
         return FirmwareInfo(
-            type=self.firmware_name,
+            type=self.firmware_name,  # backward-compatible
             version=self.firmware_version,
-            capabilities=self.capabilities.copy()
+            capabilities=self.capabilities.copy(),
+            firmware_name=self.firmware_name,
+            firmware_type=self.firmware_type.value,
+            printer_type=self.printer_type.value,
         )
     
     def home_axes(self, axes: str = ""):
@@ -510,43 +393,7 @@ class PrinterCommunicator:
         except Exception:
             return False
     
-    def _parse_temperature_response(self, response: str):
-        """온도 응답 파싱 (M105) - 통합된 파싱 사용"""
-        try:
-            # 기존 온도 파싱 로직 사용
-            if self._parse_temperature(response):
-                self.logger.debug(f"온도 응답 파싱 완료: {self.current_temps}")
-        except Exception as e:
-            self.logger.error(f"온도 응답 파싱 실패: {e}")
     
-    def _parse_position_response(self, response: str):
-        """위치 응답 파싱 (M114)"""
-        try:
-            # M114 응답 예시: "X:0.00 Y:0.00 Z:0.00 E:0.00"
-            if "X:" in response and "Y:" in response and "Z:" in response:
-                # X축 위치 파싱
-                x_match = re.search(r'X:(-?\d+\.?\d*)', response)
-                if x_match:
-                    self.current_position.x = float(x_match.group(1))
-                
-                # Y축 위치 파싱
-                y_match = re.search(r'Y:(-?\d+\.?\d*)', response)
-                if y_match:
-                    self.current_position.y = float(y_match.group(1))
-                
-                # Z축 위치 파싱
-                z_match = re.search(r'Z:(-?\d+\.?\d*)', response)
-                if z_match:
-                    self.current_position.z = float(z_match.group(1))
-                
-                # E축 위치 파싱
-                e_match = re.search(r'E:(-?\d+\.?\d*)', response)
-                if e_match:
-                    self.current_position.e = float(e_match.group(1))
-                
-                self.logger.debug(f"위치 파싱 완료: {self.current_position}")
-        except Exception as e:
-            self.logger.error(f"위치 응답 파싱 실패: {e}")
     
     def _detect_printer_type(self):
         """프린터 타입 감지"""
@@ -735,12 +582,13 @@ class PrinterCommunicator:
         await asyncio.gather(writer_coro(), reader_coro())
     
     def get_printer_type_info(self) -> Dict[str, str]:
-        """프린터 타입 정보 반환"""
+        """프린터 타입 정보 반환 (통합 모델에서 파생)"""
+        fw = self.get_firmware_info()
         return {
-            'printer_type': self.printer_type.value,
-            'firmware_type': self.firmware_type.value,
-            'firmware_name': self.firmware_name,
-            'firmware_version': self.firmware_version
+            'printer_type': fw.printer_type or '',
+            'firmware_type': fw.firmware_type or '',
+            'firmware_name': fw.firmware_name or '',
+            'firmware_version': fw.version or '',
         }
     
     def collect_extended_data(self) -> Dict[str, Any]:
@@ -789,3 +637,44 @@ class PrinterCommunicator:
                 'layer_height_range': [capabilities.layer_height_min, capabilities.layer_height_max]
             }
         return {} 
+
+
+
+
+
+# =====================위임 모듈 정리=====================
+
+    def _process_response(self, line: str):
+        """응답 처리 - 데이터 취득 모듈 위임"""
+        return self.collector.process_response(line)
+
+    def get_temperature_info(self) -> TemperatureInfo:
+        """현재 온도 정보 반환 - 데이터 취득 모듈 위임"""
+        return self.collector.get_temperature_info()
+    
+    def get_position(self) -> Position:
+        """현재 위치 정보 반환 - 데이터 취득 모듈 위임"""
+        return self.collector.get_position()    
+
+
+
+
+    def connect(self, port: Optional[str] = None, baudrate: Optional[int] = None) -> bool:
+        """프린터 연결 - 제어 모듈 위임"""
+        return self.control.connect(port, baudrate)
+    
+    def disconnect(self):
+        """프린터 연결 해제 - 제어 모듈 위임"""
+        return self.control.disconnect()
+
+    def send_gcode(self, command: str, wait: bool = False, timeout: float = 8.0) -> bool:
+        """G-code 전송 - 제어 모듈 위임"""
+        return self.control.send_gcode(command, wait, timeout)
+    
+    def send_command(self, command: str, priority: bool = False):
+        """G-code 명령 전송 - 제어 모듈 위임"""
+        return self.control.send_command(command, priority)
+
+    def send_command_and_wait(self, command: str, timeout: float = 8.0) -> Optional[str]:
+        """동기 전송/대기 - 제어 모듈 위임"""
+        return self.control.send_command_and_wait(command, timeout)

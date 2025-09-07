@@ -110,52 +110,35 @@ def get_printer_info() -> Dict[str, Any]:
                                 if response:
                                     responses.append(response)
                             
-                            # ===== M115 첫 줄(KV 묶음 라인) 우선 파싱 =====
-                            # 예: "FIRMWARE_NAME:Marlin ... SOURCE_CODE_URL:... UUID:..."
-                            import re
-                            def _parse_m115_kv_line(line: str) -> dict:
-                                pattern = re.compile(r'([A-Z_]+):\s*(.*?)(?=\s+[A-Z_]+:|$)')
-                                return {m.group(1): m.group(2).strip() for m in pattern.finditer(line.strip())}
-
-                            first_kv_line = ""
-                            for ln in responses:
-                                # KEY: 토큰이 2개 이상 포함된 라인을 우선 선택
-                                if len(re.findall(r'[A-Z_]+:', ln)) >= 2:
-                                    first_kv_line = ln.strip()
-                                    break
-
-                            if first_kv_line:
-                                kv = _parse_m115_kv_line(first_kv_line)
-                                fw = kv.get("FIRMWARE_NAME")
-                                if fw:
-                                    printer_info["firmware"] = fw
-                                model = kv.get("MACHINE_TYPE")
-                                if model:
-                                    printer_info["model"] = model
-                                uuid_val = kv.get("UUID")
-                                if uuid_val:
-                                    printer_info["uuid"] = uuid_val
-                                proto = kv.get("PROTOCOL_VERSION")
-                                if proto:
-                                    printer_info["protocol_version"] = proto
-                                ec = kv.get("EXTRUDER_COUNT")
-                                if ec:
-                                    try:
-                                        printer_info["extruder_count"] = int(ec)
-                                    except ValueError:
-                                        pass
-                                src = kv.get("SOURCE_CODE_URL")
-                                if src:
-                                    printer_info["source_code_url"] = src
+                            # ===== M115 KV 파싱 (collection 유틸로 위임) =====
+                            from core.core_collection import DataCollectionModule
+                            kv = DataCollectionModule.extract_m115_kv_from_lines(responses)
+                            fw = kv.get("FIRMWARE_NAME")
+                            if fw:
+                                printer_info["firmware"] = fw
+                            model = kv.get("MACHINE_TYPE")
+                            if model:
+                                printer_info["model"] = model
+                            uuid_val = kv.get("UUID")
+                            if uuid_val:
+                                printer_info["uuid"] = uuid_val
+                            proto = kv.get("PROTOCOL_VERSION")
+                            if proto:
+                                printer_info["protocol_version"] = proto
+                            ec = kv.get("EXTRUDER_COUNT")
+                            if ec:
+                                try:
+                                    printer_info["extruder_count"] = int(ec)
+                                except ValueError:
+                                    pass
+                            src = kv.get("SOURCE_CODE_URL")
+                            if src:
+                                printer_info["source_code_url"] = src
 
                             # ===== UUID를 설정 파일에 저장(변경 시 갱신) =====
                             try:
                                 cm = ConfigManager()
-                                old_uuid = cm.get('equipment.uuid', None)
-                                new_uuid = printer_info.get('uuid')
-                                if new_uuid and new_uuid != old_uuid:
-                                    cm.set('equipment.uuid', new_uuid)
-                                    cm.save_config()
+                                cm.update_equipment_uuid(printer_info.get('uuid'))
                             except Exception as e:
                                 logging.getLogger('ble-gatt').warning(f"설비 UUID 저장 실패: {e}")
                             
