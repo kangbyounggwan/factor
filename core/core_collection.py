@@ -48,11 +48,15 @@ class DataCollectionModule:
         if self._handle_sd_list(line, llow, now):
             return
 
-        # 2) 온도/위치(핸들러 또는 내부 파서)
+        # 2) 온도/위치 파싱
+        #    - 온도: 핸들러 우선 → 실패 시 폴백
+        #    - 위치: 항상 폴백(_parse_position) 사용하여 "Count" 이후 좌표 무시 로직 일원화
         if pc.printer_handler:
             if self._handle_temp_via_handler(line):
                 return
-            if self._handle_pos_via_handler(line):
+            if self._handle_temp_fallback(line):
+                return
+            if self._handle_pos_fallback(line):
                 return
         else:
             if self._handle_temp_fallback(line):

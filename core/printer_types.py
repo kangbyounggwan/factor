@@ -267,22 +267,8 @@ class FDMMarlinHandler(BasePrinterHandler):
         return TemperatureInfo(tool=tools, bed=bed, chamber=chamber)
     
     def parse_position(self, line: str) -> Optional[Position]:
-        if not line.startswith('X:'):
-            return None
-        
-        pattern = re.compile(r'([XYZE]):(-?\d+\.?\d*)')
-        matches = pattern.findall(line)
-        
-        position_data = {}
-        for axis, value in matches:
-            position_data[axis.lower()] = float(value)
-        
-        return Position(
-            x=position_data.get('x', 0),
-            y=position_data.get('y', 0),
-            z=position_data.get('z', 0),
-            e=position_data.get('e', 0)
-        )
+        # 위치 파싱은 core/core_collection.py의 단일 로직을 사용하도록 이 구현은 제거합니다.
+        return None
     
     def get_initialization_commands(self) -> List[str]:
         return [
