@@ -262,10 +262,12 @@ class MQTTService:
             pass
         ok = False; err = ""
         try:
-            fc = self.fc
-            if fc and getattr(fc, 'printer_comm', None) and fc.printer_comm.connected:
+            pc = getattr(self.fc, 'printer_comm', None)
+            if pc and pc.connected:
                 try:
-                    fc.home_axes(axes=axes)
+                    axes_str = axes.strip()
+                    cmd = f"G28 {axes_str}" if axes_str else "G28"
+                    pc.send_gcode(cmd, wait=True, timeout=15.0)
                     ok = True
                 except Exception as e:
                     err = str(e)
@@ -281,7 +283,7 @@ class MQTTService:
             pc = getattr(self.fc, 'printer_comm', None)
             if pc and pc.connected:
                 try:
-                    pc.send_command_and_wait("M25", timeout=3.0)
+                    pc.send_gcode("M25", wait=True, timeout=3.0)
                     ok = True
                 except Exception as e:
                     err = str(e)
@@ -297,7 +299,7 @@ class MQTTService:
             pc = getattr(self.fc, 'printer_comm', None)
             if pc and pc.connected:
                 try:
-                    pc.send_command_and_wait("M24", timeout=3.0)
+                    pc.send_gcode("M24", wait=True, timeout=3.0)
                     ok = True
                 except Exception as e:
                     err = str(e)
