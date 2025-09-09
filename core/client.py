@@ -192,25 +192,6 @@ class FactorClient:
             except Exception:
                 pass
 
-            # 자동리포트 모니터 시작(S0→S1 토글)
-            try:
-                self._start_autoreport_monitor()
-            except Exception:
-                pass
-            # 오토리포트 미지원 항목에 대해 폴링 스레드 기동
-            try:
-                if self.M155_auto_supported is False and self._temp_poll_thread is None:
-                    self._temp_poll_thread = threading.Thread(target=self._fallback_temp_poll_worker, daemon=True)
-                    self._temp_poll_thread.start()
-            except Exception:
-                pass
-            try:
-                if self.M154_auto_supported is False and self._pos_poll_thread is None:
-                    self._pos_poll_thread = threading.Thread(target=self._fallback_pos_poll_worker, daemon=True)
-                    self._pos_poll_thread.start()
-            except Exception:
-                pass
-            # 폴링 스레드 시작 제거(자동리포트만 사용)
             self._trigger_callback('on_connect', None)
             self.logger.info("3D 프린터 연결 성공")
         else:
@@ -419,7 +400,9 @@ class FactorClient:
             self.M155_auto_supported = None
             try:
                 r = self.printer_comm.send_command_and_wait("M155 S1", timeout=2.0)
-                self.M155_auto_supported = ("unknown command" not in ((r or "").strip().lower()))
+                rl = ((r or "").strip().lower())
+                # 명시적으로 ok가 있을 때만 지원으로 간주
+                self.M155_auto_supported = ("unknown command" not in rl) and ("ok" in rl)
                 self.logger.info(f"M155 S1 support={self.M155_auto_supported} resp={r!r}")
             except Exception as e:
                 self.M155_auto_supported = False
@@ -429,7 +412,9 @@ class FactorClient:
             self.M154_auto_supported = None
             try:
                 r2 = self.printer_comm.send_command_and_wait("M154 S1", timeout=2.0)
-                self.M154_auto_supported = ("unknown command" not in ((r2 or "").strip().lower()))
+                r2l = ((r2 or "").strip().lower())
+                # 위치도 명시적으로 ok가 있을 때만 지원으로 간주
+                self.M154_auto_supported = ("unknown command" not in r2l) and ("ok" in r2l)
                 self.logger.info(f"M154 S1 support={self.M154_auto_supported} resp={r2!r}")
             except Exception as e:
                 self.M154_auto_supported = False
@@ -439,17 +424,13 @@ class FactorClient:
             self.M27_auto_supported = None
             try:
                 r3 = self.printer_comm.send_command_and_wait("M27 S5", timeout=2.0)
-                self.M27_auto_supported = ("unknown command" not in ((r3 or "").strip().lower()))
+                r3l = ((r3 or "").strip().lower())
+                # M27은 ok 또는 'not sd printing'이면 지원으로 간주
+                self.M27_auto_supported = ("unknown command" not in r3l) and (("ok" in r3l) or ("not sd printing" in r3l))
                 self.logger.info(f"M27 S5 support={self.M27_auto_supported} resp={r3!r}")
             except Exception as e:
                 self.M27_auto_supported = False
                 self.logger.info(f"M27 S5 지원 안 함/오류: {e}")
-
-            # 모니터 시작 (토글은 지원되는 항목만)
-            try:
-                self._start_autoreport_monitor()
-            except Exception:
-                pass
 
             # 미지원 항목 폴링 스레드 시작
             if self.M155_auto_supported is False and self._temp_poll_thread is None:
@@ -464,6 +445,15 @@ class FactorClient:
                     self._pos_poll_thread.start()
                 except Exception:
                     pass
+            # 요약 로그
+            try:
+                self.logger.info(
+                    f"[AUTOREPORT_SUMMARY] M155={self.M155_auto_supported} M154={self.M154_auto_supported} M27={self.M27_auto_supported} "
+                    f"poll_temp={'on' if (self.M155_auto_supported is False) else 'off'} "
+                    f"poll_pos={'on' if (self.M154_auto_supported is False) else 'off'}"
+                )
+            except Exception:
+                pass
         except Exception as e:
             self.logger.debug(f"_setup_reporting_modes 오류: {e}")
     
