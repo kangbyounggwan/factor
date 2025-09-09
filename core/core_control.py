@@ -1,9 +1,6 @@
 import re
 import time
 import threading
-import os
-import stat
-import subprocess
 from enum import Enum
 from typing import Optional, Callable, TYPE_CHECKING
 if TYPE_CHECKING:
@@ -111,118 +108,10 @@ class ControlModule:
             return True
 
         except Exception as e:
-            # Permission denied 등 권한 문제 시 즉시 권한 정리 후 1회 재시도
-            try:
-                err_msg = str(e)
-            except Exception:
-                err_msg = ""
-            if ("Permission denied" in err_msg) and pc.port:
-                try:
-                    self._ensure_serial_permissions(pc.port)
-                    pc.logger.info("권한 정리 후 재시도…")
-                    # 재시도
-                    pc.serial_conn = serial.Serial(
-                        port=pc.port,
-                        baudrate=pc.baudrate,
-                        timeout=0.5,
-                        write_timeout=1,
-                        bytesize=serial.EIGHTBITS,
-                        parity=serial.PARITY_NONE,
-                        stopbits=serial.STOPBITS_ONE,
-                        rtscts=False,
-                        dsrdtr=False
-                    )
-                    try:
-                        pc.serial_conn.dtr = False
-                        time.sleep(0.2)
-                        pc.serial_conn.dtr = True
-                        pc.serial_conn.reset_input_buffer()
-                        pc.serial_conn.reset_output_buffer()
-                        time.sleep(2.0)
-                    except Exception:
-                        pass
-                    pc.running = True
-                    pc.read_thread = threading.Thread(target=pc._read_worker, daemon=True)
-                    pc.send_thread = threading.Thread(target=pc._send_worker, daemon=True)
-                    pc.read_thread.start(); pc.send_thread.start()
-                    pc.connected = True
-                    from .printer_comm import PrinterState
-                    pc._set_state(PrinterState.OPERATIONAL)
-                    pc._initialize_printer()
-                    self._maybe_enable_auto_reports()
-                    return True
-                except Exception as e2:
-                    try:
-                        pc.logger.error(f"권한 정리 후 재시도 실패: {e2}")
-                    except Exception:
-                        pass
-
-            # 실패 상세 로그 및 포트 목록 힌트 출력
-            try:
-                pc.logger.error(f"프린터 연결 실패: {e}")
-                cmd = ["bash", "-lc", "ls -l /dev/ttyUSB* 2>/dev/null || true"]
-                pc.logger.info(f"[PORT_SCAN_CMD] {' '.join(cmd)}")
-                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
-                pc.logger.info(f"[PORT_SCAN_RC] {proc.returncode}")
-                if proc.stdout:
-                    pc.logger.info(f"[PORT_SCAN_STDOUT]\n{proc.stdout.rstrip()}\n[PORT_SCAN_END]")
-                else:
-                    pc.logger.info("[PORT_SCAN_STDOUT] <empty>")
-                if proc.stderr:
-                    pc.logger.info(f"[PORT_SCAN_STDERR]\n{proc.stderr.rstrip()}\n[PORT_SCAN_END]")
-                else:
-                    pc.logger.info("[PORT_SCAN_STDERR] <empty>")
-            except Exception:
-                pass
+            pc.logger.error(f"프린터 연결 실패: {e}")
             from .printer_comm import PrinterState
             pc._set_state(PrinterState.ERROR)
             return False
-
-    def _ensure_serial_permissions(self, dev_path: str) -> None:
-        """/dev/tty* 권한 문제가 의심될 때 모드/그룹을 정리 시도 (가능 범위 내)."""
-        try:
-            st = os.stat(dev_path)
-            try:
-                self.pc.logger.info(f"[PERM] before: {dev_path} mode={oct(stat.S_IMODE(st.st_mode))} uid={st.st_uid} gid={st.st_gid}")
-            except Exception:
-                pass
-        except Exception:
-            pass
-
-        # 직접 chmod (root일 때만 효과)
-        try:
-            os.chmod(dev_path, 0o666)
-        except Exception:
-            pass
-
-        # sudo -n 사용 시도 (서비스 사용자에 NOPASSWD 필요; 실패해도 무시)
-        cmds = [
-            ["sudo", "-n", "chgrp", "dialout", dev_path],
-            ["sudo", "-n", "chmod", "660", dev_path],
-            ["sudo", "-n", "udevadm", "control", "--reload-rules"],
-            ["sudo", "-n", "udevadm", "trigger", "--subsystem-match=tty"],
-        ]
-        for cmd in cmds:
-            try:
-                r = subprocess.run(cmd, timeout=3, check=False, capture_output=True, text=True)
-                if r.stdout.strip():
-                    self.pc.logger.info(f"[PERM] {' '.join(cmd)} → {r.stdout.strip()}")
-                if r.stderr.strip():
-                    self.pc.logger.debug(f"[PERM] {' '.join(cmd)} (stderr) → {r.stderr.strip()}")
-            except Exception as ex:
-                try:
-                    self.pc.logger.debug(f"[PERM] {' '.join(cmd)} 실패/무시: {ex}")
-                except Exception:
-                    pass
-
-        try:
-            st2 = os.stat(dev_path)
-            try:
-                self.pc.logger.info(f"[PERM] after:  {dev_path} mode={oct(stat.S_IMODE(st2.st_mode))} uid={st2.st_uid} gid={st2.gid}")
-            except Exception:
-                pass
-        except Exception:
-            pass
 
     def disconnect(self):
         """

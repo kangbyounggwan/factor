@@ -358,11 +358,6 @@ class FactorClient:
             pass
         self._arm_thread = None
     
-    # 폴링 스레드 로직 제거(자동리포트만 사용)
-    
-    # 폴링 워커 제거
-    
-    # _start_watchdog 제거됨 (하트비트/워치독 미사용)
     
     def _handle_error(self, error_type: str):
         """오류 처리"""
@@ -426,57 +421,46 @@ class FactorClient:
                 self.printer_comm.disconnect()
                 time.sleep(1)
             
-            # 1차: 기본 경로로 재연결 시도 (설정값/자동감지)
+            # 기본 경로 시도 없이: 먼저 /dev/ttyUSB* 스캔 후 결과로만 연결 시도
+            ok = False
+            self.logger.info("포트 스캔 시작: /dev/ttyUSB*")
+            # ls -l /dev/ttyUSB* 로그 덤프(가능 시)
             try:
-                port = self.printer_port if not self.auto_detect else ""
-                if not self.printer_comm:
-                    self.printer_comm = PrinterCommunicator(port=port, baudrate=self.printer_baudrate)
-                ok = self.printer_comm.connect(port=port, baudrate=self.printer_baudrate)
+                cmd = ["bash", "-lc", "ls -l /dev/ttyUSB* 2>/dev/null || true"]
+                self.logger.info(f"[PORT_SCAN_CMD] {' '.join(cmd)}")
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+                self.logger.info(f"[PORT_SCAN_RC] {proc.returncode}")
+                if proc.stdout:
+                    self.logger.info(f"[PORT_SCAN_STDOUT]\n{proc.stdout.rstrip()}\n[PORT_SCAN_END]")
+                else:
+                    self.logger.info("[PORT_SCAN_STDOUT] <empty>")
+                if proc.stderr:
+                    self.logger.info(f"[PORT_SCAN_STDERR]\n{proc.stderr.rstrip()}\n[PORT_SCAN_END]")
+                else:
+                    self.logger.info("[PORT_SCAN_STDERR] <empty>")
             except Exception as e:
-                self.logger.warning(f"기본 재연결 경고: {e}")
-                ok = False
+                self.logger.debug(f"ls -l 실행 불가/무시: {e}")
 
-            # 2차: 실패 시 가능한 포트 후보를 나열하고 순차 연결 시도
-            if not ok:
-                self.logger.warning("기본 재연결 실패 → 포트 스캔 후 재시도")
-                # ls -l /dev/ttyUSB* 로그 덤프(가능 시)
-                try:
-                    cmd = ["bash", "-lc", "ls -l /dev/ttyUSB* 2>/dev/null || true"]
-                    self.logger.info(f"[PORT_SCAN_CMD] {' '.join(cmd)}")
-                    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
-                    self.logger.info(f"[PORT_SCAN_RC] {proc.returncode}")
-                    if proc.stdout:
-                        self.logger.info(f"[PORT_SCAN_STDOUT]\n{proc.stdout.rstrip()}\n[PORT_SCAN_END]")
-                    else:
-                        self.logger.info("[PORT_SCAN_STDOUT] <empty>")
-                    if proc.stderr:
-                        self.logger.info(f"[PORT_SCAN_STDERR]\n{proc.stderr.rstrip()}\n[PORT_SCAN_END]")
-                    else:
-                        self.logger.info("[PORT_SCAN_STDERR] <empty>")
-                except Exception as e:
-                    self.logger.debug(f"ls -l 실행 불가/무시: {e}")
-
-                # 파이썬 glob으로 후보 수집
+            # 파이썬 glob으로 후보 수집(ttyUSB만)
+            candidates = []
+            try:
+                candidates.extend(sorted(glob.glob("/dev/ttyUSB*")))
+            except Exception:
                 candidates = []
-                try:
-                    for patt in ("/dev/serial/by-id/*", "/dev/ttyUSB*", "/dev/ttyACM*"):
-                        candidates.extend(sorted(glob.glob(patt)))
-                except Exception:
-                    candidates = []
 
-                tried = set()
-                for dev in candidates:
-                    if dev in tried:
-                        continue
-                    tried.add(dev)
-                    try:
-                        self.logger.info(f"포트 재연결 시도: {dev}@{self.printer_baudrate}")
-                        ok = self.printer_comm.connect(port=dev, baudrate=self.printer_baudrate)
-                        if ok:
-                            self.logger.info(f"프린터 재연결 성공: {dev}")
-                            break
-                    except Exception as e:
-                        self.logger.warning(f"포트 {dev} 연결 실패: {e}")
+            tried = set()
+            for dev in candidates:
+                if dev in tried:
+                    continue
+                tried.add(dev)
+                try:
+                    self.logger.info(f"포트 재연결 시도: {dev}@{self.printer_baudrate}")
+                    ok = self.printer_comm.connect(port=dev, baudrate=self.printer_baudrate)
+                    if ok:
+                        self.logger.info(f"프린터 재연결 성공: {dev}")
+                        break
+                except Exception as e:
+                    self.logger.warning(f"포트 {dev} 연결 실패: {e}")
 
             if ok and self.printer_comm and self.printer_comm.connected:
                 # 성공 후 자동리포트 재설정 및 모니터 보장
