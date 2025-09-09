@@ -39,3 +39,30 @@ def topic_dash_status(device_serial: str) -> str:
 def topic_admin_result(device_serial: str) -> str:
     return f"admin_result/{device_serial}"
 
+
+def topic_sd_list(device_serial: str) -> str:
+    return f"sd_list/{device_serial}"
+
+
+def topic_sd_list_result(device_serial: str) -> str:
+    return f"sd_list_result/{device_serial}"
+
+
+def topic_ctrl_home(device_serial: str) -> str:
+    return f"control/home/{device_serial}"
+
+
+def topic_ctrl_pause(device_serial: str) -> str:
+    return f"control/pause/{device_serial}"
+
+
+def topic_ctrl_resume(device_serial: str) -> str:
+    return f"control/resume/{device_serial}"
+
+
+def topic_ctrl_cancel(device_serial: str) -> str:
+    return f"control/cancel/{device_serial}"
+
+
+def topic_ctrl_result(device_serial: str) -> str:
+    return f"control_result/{device_serial}"
