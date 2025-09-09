@@ -168,6 +168,14 @@ class MQTTService:
         error = ""
         try:
             status, resp = self._get_local_api('/printer/sd/list')
+            # API 호출 결과 로깅 (raw)
+            try:
+                raw_preview = str(resp)
+                if len(raw_preview) > 800:
+                    raw_preview = raw_preview[:800] + '...'
+                self.logger.info(f"[SD_LIST_API] status={status} resp_raw={raw_preview}")
+            except Exception:
+                pass
                     # 1) resp를 dict로 정규화
             raw_resp = resp
             try:
@@ -208,6 +216,14 @@ class MQTTService:
             "timestamp": int(time.time() * 1000),
         }
         try:
+            # 최종 페이로드 로깅
+            try:
+                payload_preview = json.dumps(payload, ensure_ascii=False)
+                if len(payload_preview) > 800:
+                    payload_preview = payload_preview[:800] + '...'
+                self.logger.info(f"[MQTT_PUB] topic={self.sd_list_result_topic} payload={payload_preview}")
+            except Exception:
+                pass
             self.client.publish(
                 self.sd_list_result_topic,
                 json.dumps(payload, ensure_ascii=False),
