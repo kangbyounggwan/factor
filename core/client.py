@@ -411,16 +411,8 @@ class FactorClient:
                         p = self.printer_comm.collector.get_position()
                     except Exception:
                         p = None
-                    if p is not None:
-                        try:
-                            self.logger.info(f"[POS_POLL] {p.to_dict()}")
-                        except Exception:
-                            pass
-                    else:
-                        try:
-                            self.logger.info("[POS_POLL] no response")
-                        except Exception:
-                            pass
+                    # 폴링 로그 제거 (기능만 유지)
+                    _ = p is not None
             except Exception:
                 pass
             next_ts += interval
@@ -438,10 +430,8 @@ class FactorClient:
                     try:
                         r = self.printer_comm.send_command_and_wait("M27", timeout=2.0)
                         if r:
-                            try:
-                                self.logger.info(f"[M27_POLL] {r.strip()}")
-                            except Exception:
-                                pass
+                            # 폴링 로그 제거 (기능만 유지)
+                            _ = r
                             # ETA 추정기 업데이트 및 진행률 캐시에 반영
                             try:
                                 eta = getattr(self, 'm27_eta', None)

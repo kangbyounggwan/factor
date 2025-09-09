@@ -308,7 +308,8 @@ class PrinterCommunicator:
                                                         td['bed']['offset'] = round(float(td['bed'].get('offset', 0.0)), 2)
                                                     except Exception:
                                                         pass
-                                                self.logger.info(f"[PARSED_TEMP] {json.dumps(td, ensure_ascii=False)}")
+                                                # 폴링/일반 파싱 로그는 DEBUG로 내림
+                                                self.logger.debug(f"[PARSED_TEMP] {json.dumps(td, ensure_ascii=False)}")
                                             except Exception:
                                                 pass
                                     # 위치 라인일 가능성
@@ -322,7 +323,8 @@ class PrinterCommunicator:
                                                     'z': round(float(getattr(pos, 'z', 0.0)), 2),
                                                     'e': round(float(getattr(pos, 'e', 0.0)), 2),
                                                 }
-                                                self.logger.info(f"[PARSED_POS] {json.dumps(pd, ensure_ascii=False)}")
+                                                # 폴링/일반 파싱 로그는 DEBUG로 내림
+                                                self.logger.debug(f"[PARSED_POS] {json.dumps(pd, ensure_ascii=False)}")
                                             except Exception:
                                                 pass
                             except Exception:

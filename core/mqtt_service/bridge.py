@@ -240,6 +240,10 @@ class MQTTService:
             "timestamp": int(time.time() * 1000),
         }
         try:
+            try:
+                self.logger.info(f"CONTROL {action} -> ok={ok} msg={message or ''}")
+            except Exception:
+                pass
             self.client.publish(self.ctrl_result_topic, json.dumps(payload, ensure_ascii=False), qos=1, retain=False)
         except Exception:
             pass
@@ -359,9 +363,9 @@ class MQTTService:
         def _run():
             while self._status_streaming:
                 try:
-                    # INFO 로그: 매 발행 시 토픽 기록
+                    # 일반 상태 발행 로그는 과다 → DEBUG로 전환
                     try:
-                        self.logger.info(f"status publish -> {topic_dash_status(self.device_serial)}")
+                        self.logger.debug(f"status publish -> {topic_dash_status(self.device_serial)}")
                     except Exception:
                         pass
                     handle_get_status(self.client, self.cm, self.fc)
