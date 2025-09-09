@@ -530,7 +530,7 @@ def api_error(error):
 
 @api_bp.route('/printer/sd/list', methods=['GET'])
 def list_sd_files():
-    """SD 카드 파일 목록 반환(M20만 사용; M21은 사용 지양)
+    """SD 카드 파일 목록 반환(M20 파싱 완료까지 동기 대기; Begin/End 블록 감지)
     - 프론트: 대시보드에서 주기적으로 호출
     """
     try:
@@ -547,16 +547,39 @@ def list_sd_files():
         except Exception:
             pass
 
-        # 목록 요청: 내부 수신 파서가 Begin/End file list를 수집
-        resp = pc.send_command_and_wait('M20', timeout=3.0)
-        if not resp:
-            # SD가 초기화되지 않았거나 비어있을 수 있음 → 안전하게 에러 반환(오토스타트 방지)
-            return jsonify({'success': False, 'error': 'SD not ready (M20 no response). Please initialize SD on printer UI.'}), 503
-        # 파서 버퍼 플러시 여유
-        time.sleep(0.1)
+        # 수신 파서의 M20 캡처 상태 직접 모니터링
+        collector = getattr(pc, 'collector', None)
+        began = False
 
+        # 비대기 전송으로 M20 요청 (수신 워커가 Begin/End 블록을 수집)
+        try:
+            pc.send_command('M20')
+        except Exception:
+            pass
+
+        # Begin/End 파일 리스트 블록 완료까지 대기 (최대 6초)
+        deadline = time.time() + 6.0
+        while time.time() < deadline:
+            try:
+                if collector and getattr(collector, '_sd_list_capturing', False):
+                    began = True
+                elif began:
+                    break  # End를 지나며 finalize 완료됨
+            except Exception:
+                pass
+            time.sleep(0.05)
+
+        # 파서가 만든 최신 목록을 사용하여 요구 포맷으로 변환
         info = getattr(pc, 'sd_card_info', {}) or {}
-        files = info.get('files', [])
+        raw_files = list(info.get('files') or [])
+        files = []
+        for f in raw_files:
+            if isinstance(f, dict):
+                files.append({
+                    'filename': (f.get('name') or ''),
+                    'file_size': int(f.get('size') or 0),
+                })
+
         return jsonify({'success': True, 'files': files, 'last_update': info.get('last_update', 0)})
     except Exception as e:
         logger.error(f"SD 목록 조회 오류: {e}")
