@@ -102,7 +102,7 @@ class FactorClientFirmware:
                 self.logger.warning(f"MQTT 서비스 시작 실패(계속 진행): {e}")
             
             # 웹 서버 시작 (비활성화)
-            # self._start_web_server()
+            self._start_web_server()
             
             # 메인 루프
             self._main_loop()
