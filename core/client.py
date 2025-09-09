@@ -39,8 +39,8 @@ class FactorClient:
         self.firmware_type = printer_config.get('firmware_type', 'auto')
         
         # 폴링 간격
-        self.temp_poll_interval = printer_config.get('temp_poll_interval', 5.0)
-        self.position_poll_interval = printer_config.get('position_poll_interval', 10.0)
+        self.temp_poll_interval = printer_config.get('temp_poll_interval', 1.0)
+        self.position_poll_interval = printer_config.get('position_poll_interval', 1.0)
         
         # 프린터 통신 객체 (항상 실제 연결 시도)
         port = self.printer_port if not self.auto_detect else ""
@@ -378,7 +378,7 @@ class FactorClient:
 
     def _fallback_pos_poll_worker(self):
         """위치 폴링(자동리포트가 미지원인 펌웨어용)"""
-        interval = float(getattr(self, "position_poll_interval", 2.0))
+        interval = float(getattr(self, "position_poll_interval", 1.0))
         next_ts = time.monotonic()
         while self.running and self.connected and (self.M154_auto_supported is False):
             try:
