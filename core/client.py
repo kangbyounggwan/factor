@@ -523,6 +523,16 @@ class FactorClient:
                 )
             except Exception:
                 pass
+            
+            try:
+                pc = self.printer_comm
+                if pc and pc.connected:
+                    self.logger.info("초기 SD 목록 갱신 요청(M20)")
+                    pc.send_command_and_wait("M20", timeout=3.0)
+            except Exception as e:
+                self.logger.debug(f"M20 초기 SD 목록 갱신 실패: {e}")
+
+
         except Exception as e:
             self.logger.debug(f"_setup_reporting_modes 오류: {e}")
     
