@@ -10,7 +10,7 @@ server:
 
 # 로깅 설정
 logging:
-  level: "WARNING"
+  level: "INFO"
   file: "logs/factor-client-rpi.log"
   max_size: "50MB"
   backup_count: 10

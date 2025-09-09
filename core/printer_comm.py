@@ -4,6 +4,7 @@
 """
 
 import serial
+import json
 import threading
 import time
 import re
@@ -263,6 +264,14 @@ class PrinterCommunicator:
                         except Exception:
                             data = ''
                         self.logger.debug(f"[RX_RAW] {repr(data)}")
+                        # INFO 레벨일 때 raw 데이터도 표기
+                        try:
+                            if self.logger.getEffectiveLevel() == logging.INFO and data:
+                                snippet = data.replace('\r', '').replace('\n', '\\n')
+                                if snippet:
+                                    self.logger.info(f"[RX_RAW] {snippet[:300]}")
+                        except Exception:
+                            pass
                         buffer += data.replace('\r\n', '\n').replace('\r', '\n')
                     
                     # 2) 버퍼에 라인이 있으면 처리
@@ -272,6 +281,50 @@ class PrinterCommunicator:
                         if line:
                             self.logger.debug(f"[RX_LINE] {line}")
                             self._process_response(line)
+                            # INFO 레벨일 때 변환(파싱) 데이터 표기
+                            try:
+                                if self.logger.getEffectiveLevel() == logging.INFO:
+                                    low = line.lower()
+                                    # 온도 라인일 가능성
+                                    if ('t:' in low) or (self.temp_pattern.search(line) is not None):
+                                        ti = getattr(self, '_last_temp_info', None)
+                                        if ti:
+                                            try:
+                                                td = ti.to_dict()
+                                                # 소수점 2자리로 라운딩
+                                                for k, v in list((td.get('tool') or {}).items()):
+                                                    try:
+                                                        v['actual'] = round(float(v.get('actual', 0.0)), 2)
+                                                        v['target'] = round(float(v.get('target', 0.0)), 2)
+                                                        v['offset'] = round(float(v.get('offset', 0.0)), 2)
+                                                    except Exception:
+                                                        pass
+                                                if td.get('bed'):
+                                                    try:
+                                                        td['bed']['actual'] = round(float(td['bed'].get('actual', 0.0)), 2)
+                                                        td['bed']['target'] = round(float(td['bed'].get('target', 0.0)), 2)
+                                                        td['bed']['offset'] = round(float(td['bed'].get('offset', 0.0)), 2)
+                                                    except Exception:
+                                                        pass
+                                                self.logger.info(f"[PARSED_TEMP] {json.dumps(td, ensure_ascii=False)}")
+                                            except Exception:
+                                                pass
+                                    # 위치 라인일 가능성
+                                    if low.startswith('x:') or (' x:' in low):
+                                        pos = getattr(self, 'current_position', None)
+                                        if pos:
+                                            try:
+                                                pd = {
+                                                    'x': round(float(getattr(pos, 'x', 0.0)), 2),
+                                                    'y': round(float(getattr(pos, 'y', 0.0)), 2),
+                                                    'z': round(float(getattr(pos, 'z', 0.0)), 2),
+                                                    'e': round(float(getattr(pos, 'e', 0.0)), 2),
+                                                }
+                                                self.logger.info(f"[PARSED_POS] {json.dumps(pd, ensure_ascii=False)}")
+                                            except Exception:
+                                                pass
+                            except Exception:
+                                pass
                             self.last_response_time = time.time()
                     
                     # 3) 남아있는 바이트가 많다면 추가로 비동기 드레인
@@ -283,6 +336,14 @@ class PrinterCommunicator:
                             extra_s = ''
                         if extra_s:
                             self.logger.debug(f"[RX_RAW] {repr(extra_s)}")
+                            # INFO 레벨일 때 raw 데이터도 표기
+                            try:
+                                if self.logger.getEffectiveLevel() == logging.INFO:
+                                    snippet2 = extra_s.replace('\r', '').replace('\n', '\\n')
+                                    if snippet2:
+                                        self.logger.info(f"[RX_RAW] {snippet2[:300]}")
+                            except Exception:
+                                pass
                             buffer += extra_s.replace('\r\n', '\n').replace('\r', '\n')
                 
                 time.sleep(0.01)  # CPU 사용률 조절
