@@ -16,7 +16,6 @@ import psutil
 import glob
 import subprocess
 import os
-import stat
 import random
 
 from .data_models import *
@@ -131,6 +130,12 @@ class FactorClient:
         self._temp_poll_thread: Optional[threading.Thread] = None
         self._pos_poll_thread: Optional[threading.Thread] = None
 
+        # sudo 비밀번호(재부팅 시도에 사용; 환경변수로 주입 권장)
+        try:
+            self.sudo_password = os.environ.get('SUDO_PASSWORD')
+        except Exception:
+            self.sudo_password = None
+
         self.logger.info("Factor 클라이언트 초기화 완료")
     
     def add_callback(self, event_type: str, callback: Callable):
@@ -182,37 +187,8 @@ class FactorClient:
             # 시작 즉시 자동리포트 시도(S1). 미지원이면 폴링으로 전환
             try:
                 if self.printer_comm and self.printer_comm.connected:
-                    # 온도 자동리포트 지원 여부 확인 (동기 응답 검사)
-                    self.M155_auto_supported = None
-                    try:
-                        r = self.printer_comm.send_command_and_wait("M155 S1", timeout=2.0)
-                        rl = (r or "").strip().lower()
-                        self.M155_auto_supported = ("unknown command" not in rl)
-                        self.logger.info(f"M155 S1 support={self.M155_auto_supported} resp={r!r}")
-                    except Exception as e:
-                        self.M155_auto_supported = False
-                        self.logger.info(f"M155 S1 지원 안 함/오류: {e}")
-
-                    # 위치 자동리포트 지원 여부 확인 (동기 응답 검사)
-                    self.M154_auto_supported = None
-                    try:
-                        r2 = self.printer_comm.send_command_and_wait("M154 S1", timeout=2.0)
-                        r2l = (r2 or "").strip().lower()
-                        self.M154_auto_supported = ("unknown command" not in r2l)
-                        self.logger.info(f"M154 S1 support={self.M154_auto_supported} resp={r2!r}")
-                    except Exception as e:
-                        self.M154_auto_supported = False
-                        self.logger.info(f"M154 S1 지원 안 함/오류: {e}")
-
-                    # SD 진행률 오토리포트는 유지(가능 시)
-                    try:
-                        r3 = self.printer_comm.send_command_and_wait("M27 S5", timeout=2.0)
-                        r3l = (r3 or "").strip().lower()
-                        self.M27_auto_supported = ("unknown command" not in r3l)
-                        self.logger.info(f"M27 S5 support={self.M27_auto_supported} resp={r3!r}")
-                    except Exception as e:
-                        self.M27_auto_supported = False
-                        self.logger.info(f"M27 S5 지원 안 함/오류: {e}")
+                    # 통합 함수로 설정
+                    self._setup_reporting_modes()
             except Exception:
                 pass
 
@@ -408,7 +384,7 @@ class FactorClient:
         """온도 폴링(자동리포트가 미지원인 펌웨어용)"""
         interval = float(getattr(self, "temp_poll_interval", 1.0))
         next_ts = time.monotonic()
-        while self.running and self.connected and (self._auto_temp_supported is False):
+        while self.running and self.connected and (self.M155_auto_supported is False):
             try:
                 if self.printer_comm and self.printer_comm.connected:
                     self.printer_comm.send_command("M105")
@@ -423,7 +399,7 @@ class FactorClient:
         """위치 폴링(자동리포트가 미지원인 펌웨어용)"""
         interval = float(getattr(self, "position_poll_interval", 2.0))
         next_ts = time.monotonic()
-        while self.running and self.connected and (self._auto_pos_supported is False):
+        while self.running and self.connected and (self.M154_auto_supported is False):
             try:
                 if self.printer_comm and self.printer_comm.connected:
                     self.printer_comm.send_command("M114")
@@ -433,6 +409,63 @@ class FactorClient:
             sleep_for = max(0.0, next_ts - time.monotonic())
             if sleep_for > 0:
                 time.sleep(sleep_for)
+
+    def _setup_reporting_modes(self) -> None:
+        """연결 직후 자동리포트 지원 여부를 확인하고, 모니터/폴링을 설정한다."""
+        try:
+            if not (self.printer_comm and self.printer_comm.connected):
+                return
+            # 온도 자동리포트 (M155)
+            self.M155_auto_supported = None
+            try:
+                r = self.printer_comm.send_command_and_wait("M155 S1", timeout=2.0)
+                self.M155_auto_supported = ("unknown command" not in ((r or "").strip().lower()))
+                self.logger.info(f"M155 S1 support={self.M155_auto_supported} resp={r!r}")
+            except Exception as e:
+                self.M155_auto_supported = False
+                self.logger.info(f"M155 S1 지원 안 함/오류: {e}")
+
+            # 위치 자동리포트 (M154)
+            self.M154_auto_supported = None
+            try:
+                r2 = self.printer_comm.send_command_and_wait("M154 S1", timeout=2.0)
+                self.M154_auto_supported = ("unknown command" not in ((r2 or "").strip().lower()))
+                self.logger.info(f"M154 S1 support={self.M154_auto_supported} resp={r2!r}")
+            except Exception as e:
+                self.M154_auto_supported = False
+                self.logger.info(f"M154 S1 지원 안 함/오류: {e}")
+
+            # SD 진행률 자동리포트 (M27)
+            self.M27_auto_supported = None
+            try:
+                r3 = self.printer_comm.send_command_and_wait("M27 S5", timeout=2.0)
+                self.M27_auto_supported = ("unknown command" not in ((r3 or "").strip().lower()))
+                self.logger.info(f"M27 S5 support={self.M27_auto_supported} resp={r3!r}")
+            except Exception as e:
+                self.M27_auto_supported = False
+                self.logger.info(f"M27 S5 지원 안 함/오류: {e}")
+
+            # 모니터 시작 (토글은 지원되는 항목만)
+            try:
+                self._start_autoreport_monitor()
+            except Exception:
+                pass
+
+            # 미지원 항목 폴링 스레드 시작
+            if self.M155_auto_supported is False and self._temp_poll_thread is None:
+                try:
+                    self._temp_poll_thread = threading.Thread(target=self._fallback_temp_poll_worker, daemon=True)
+                    self._temp_poll_thread.start()
+                except Exception:
+                    pass
+            if self.M154_auto_supported is False and self._pos_poll_thread is None:
+                try:
+                    self._pos_poll_thread = threading.Thread(target=self._fallback_pos_poll_worker, daemon=True)
+                    self._pos_poll_thread.start()
+                except Exception:
+                    pass
+        except Exception as e:
+            self.logger.debug(f"_setup_reporting_modes 오류: {e}")
     
     
     def _handle_error(self, error_type: str):
@@ -529,11 +562,6 @@ class FactorClient:
                 if dev in tried:
                     continue
                 tried.add(dev)
-                # 문자 디바이스/권한/udev 상태 보정
-                try:
-                    self._reset_and_fix_tty(dev)
-                except Exception:
-                    pass
                 try:
                     self.logger.info(f"포트 재연결 시도: {dev}@{self.printer_baudrate}")
                     ok = self.printer_comm.connect(port=dev, baudrate=self.printer_baudrate)
@@ -541,38 +569,12 @@ class FactorClient:
                         self.logger.info(f"프린터 재연결 성공: {dev}")
                         break
                 except Exception as e:
-                    if "Permission denied" in str(e):
-                        self.logger.warning(f"[PERM] {dev} Permission denied → udev/dialout 보정 후 재시도")
-                        try:
-                            self._reset_and_fix_tty(dev)
-                        except Exception:
-                            pass
-                        try:
-                            ok = self.printer_comm.connect(port=dev, baudrate=self.printer_baudrate)
-                            if ok:
-                                self.logger.info(f"프린터 재연결 성공: {dev}")
-                                break
-                        except Exception as e2:
-                            self.logger.warning(f"포트 {dev} 재시도 실패: {e2}")
-                    else:
-                        self.logger.warning(f"포트 {dev} 연결 실패: {e}")
+                    self.logger.warning(f"포트 {dev} 연결 실패: {e}")
 
             if ok and self.printer_comm and self.printer_comm.connected:
-                # 성공 후 자동리포트 재설정 및 모니터 보장
+                # 성공 후 자동리포트/폴링 모드 설정
                 try:
-                    self.printer_comm.send_command("M155 S1")
-                except Exception:
-                    pass
-                try:
-                    self.printer_comm.send_command("M154 S1")
-                except Exception:
-                    pass
-                try:
-                    self.printer_comm.send_command("M27 S5")
-                except Exception:
-                    pass
-                try:
-                    self._start_autoreport_monitor()
+                    self._setup_reporting_modes()
                 except Exception:
                     pass
 
@@ -581,53 +583,83 @@ class FactorClient:
                 self.logger.info("프린터 재연결 완료 및 에러 카운트 리셋")
             else:
                 self.connected = False
-                self.logger.error("프린터 재연결 실패")
+                self.logger.error("프린터 재연결 실패 → 5회 재시도 후 재부팅 예정")
+                # 5회 재시도(총 25초) 후 실패 시 리부팅
+                try:
+                    total_ok = False
+                    for attempt in range(1, 6):
+                        self.logger.info(f"[RECONNECT] 추가 시도 {attempt}/5")
+                        # 짧은 대기
+                        try:
+                            time.sleep(5)
+                        except Exception:
+                            pass
+                        # 재스캔 및 연결 시도
+                        ok2 = False
+                        try:
+                            cmd = ["bash", "-lc", "ls -l /dev/ttyUSB* 2>/dev/null || true"]
+                            self.logger.info(f"[PORT_SCAN_CMD] {' '.join(cmd)}")
+                            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+                            self.logger.info(f"[PORT_SCAN_RC] {proc.returncode}")
+                            if proc.stdout:
+                                self.logger.info(f"[PORT_SCAN_STDOUT]\n{proc.stdout.rstrip()}\n[PORT_SCAN_END]")
+                            else:
+                                self.logger.info("[PORT_SCAN_STDOUT] <empty>")
+                            if proc.stderr:
+                                self.logger.info(f"[PORT_SCAN_STDERR]\n{proc.stderr.rstrip()}\n[PORT_SCAN_END]")
+                            else:
+                                self.logger.info("[PORT_SCAN_STDERR] <empty>")
+                        except Exception as e:
+                            self.logger.debug(f"ls -l 실행 불가/무시: {e}")
+
+                        candidates2 = []
+                        try:
+                            candidates2.extend(sorted(glob.glob("/dev/ttyUSB*")))
+                        except Exception:
+                            candidates2 = []
+                        tried2 = set()
+                        for dev in candidates2:
+                            if dev in tried2:
+                                continue
+                            tried2.add(dev)
+                            try:
+                                self.logger.info(f"포트 재연결 시도: {dev}@{self.printer_baudrate}")
+                                ok2 = self.printer_comm.connect(port=dev, baudrate=self.printer_baudrate)
+                                if ok2:
+                                    self.logger.info(f"프린터 재연결 성공: {dev}")
+                                    total_ok = True
+                                    break
+                            except Exception as e:
+                                self.logger.warning(f"포트 {dev} 연결 실패: {e}")
+                                
+                        if total_ok and self.printer_comm and self.printer_comm.connected:
+                            self.connected = True
+                            # 자동리포트/폴링 모드 설정
+                            try:
+                                self._setup_reporting_modes()
+                            except Exception:
+                                pass
+                            self.error_count = 0
+                            self.logger.info("프린터 재연결 완료 및 에러 카운트 리셋")
+                            return
+
+                    # 여기까지 오면 실패 → 재부팅
+                    self.logger.error("[RECONNECT] 5회 재연결 실패 → 시스템 재부팅")
+                    try:
+                        if self.sudo_password:
+                            p = subprocess.Popen(["sudo", "-S", "reboot"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                            stdout, stderr = p.communicate(input=f"{self.sudo_password}\n", timeout=5)
+                            self.logger.info(f"[REBOOT] rc={p.returncode}, stdout={stdout.strip()}, stderr={stderr.strip()}")
+                        else:
+                            proc2 = subprocess.run(["sudo", "reboot"], capture_output=True, text=True, timeout=5)
+                            self.logger.info(f"[REBOOT] rc={proc2.returncode}, stdout={proc2.stdout.strip()}, stderr={proc2.stderr.strip()}")
+                    except Exception as e:
+                        self.logger.error(f"[REBOOT] 재부팅 시도 중 오류: {e}")
+                except Exception as e:
+                    self.logger.error(f"추가 재시도 루프 오류: {e}")
                 
         except Exception as e:
             self.logger.error(f"프린터 재연결 중 오류: {e}")
-
-    def _reset_and_fix_tty(self, dev_path: str) -> None:
-        """ttyUSB 노드가 문자 디바이스인지 확인하고, 아니면 udev로 재생성. dialout/권한 보정 시도.
-        sudo NOPASSWD가 없으면 자동으로 실패하고 로그만 남깁니다.
-        """
-        # 상태 로그(before)
-        try:
-            st = os.stat(dev_path)
-            self.logger.info(f"[TTYCHK] {dev_path} mode={oct(stat.S_IMODE(st.st_mode))} uid={st.st_uid} gid={st.st_gid}")
-        except Exception:
-            pass
-
-        # 문자 디바이스가 아니면 제거 후 udev 트리거
-        try:
-            st = os.stat(dev_path)
-            if not stat.S_ISCHR(st.st_mode):
-                self.logger.warning(f"[TTYFIX] {dev_path} not char device → rm & udev trigger")
-                try:
-                    subprocess.run(["sudo", "-n", "rm", "-f", dev_path], timeout=2, check=False)
-                except Exception:
-                    pass
-                try:
-                    subprocess.run(["sudo", "-n", "udevadm", "control", "--reload-rules"], timeout=3, check=False)
-                    subprocess.run(["sudo", "-n", "udevadm", "trigger", "--subsystem-match=tty"], timeout=3, check=False)
-                    subprocess.run(["sudo", "-n", "udevadm", "settle", "-t", "5"], timeout=6, check=False)
-                except Exception:
-                    pass
-        except Exception as e:
-            self.logger.debug(f"[TTYFIX] stat/udev ignore: {e}")
-
-        # dialout 그룹/모드 보정(가능 시)
-        try:
-            subprocess.run(["sudo", "-n", "chgrp", "dialout", dev_path], timeout=3, check=False)
-            subprocess.run(["sudo", "-n", "chmod", "660", dev_path], timeout=3, check=False)
-        except Exception as e:
-            self.logger.debug(f"[TTYFIX] chgrp/chmod ignore: {e}")
-
-        # 상태 로그(after)
-        try:
-            st2 = os.stat(dev_path)
-            self.logger.info(f"[TTYCHK_AFTER] {dev_path} mode={oct(stat.S_IMODE(st2.st_mode))} uid={st2.st_uid} gid={st2.st_gid}")
-        except Exception:
-            pass
     
     
     def _system_monitor_worker(self):

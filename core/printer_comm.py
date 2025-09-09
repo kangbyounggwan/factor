@@ -141,14 +141,14 @@ class PrinterCommunicator:
         self.printer_handler = None
         self.extended_collector = None
         self.detection_responses = []  # 감지용 응답 저장
+        # 재연결 중복 트리거 방지 플래그
+        self._reconnect_pending = False
         
         self.logger.info("프린터 통신 모듈 초기화 완료")
         
         # 분리된 모듈 초기화
         self.control = ControlModule(self)
         self.collector = DataCollectionModule(self)
-        # 내부 재연결 스케줄러 플래그
-        self._reconnect_scheduled = False
     
     def add_callback(self, event_type: str, callback: Callable):
         """콜백 함수 추가"""
@@ -352,36 +352,35 @@ class PrinterCommunicator:
                 
             except Exception as e:
                 self.logger.error(f"시리얼 읽기 오류: {e}")
-                # 읽기 실패 시 재연결 루프 스케줄
+                # 장치 분리/다중 접근 등 치명 오류 발생 시 즉시 재연결 루프 트리거
                 try:
-                    if not getattr(self, '_reconnect_scheduled', False):
-                        self._reconnect_scheduled = True
-                        def _reconn():
+                    msg = str(e).lower()
+                    disconnected_hint = (
+                        "device disconnected" in msg or
+                        "returned no data" in msg or
+                        "permission denied" in msg or
+                        "port is closed" in msg
+                    )
+                except Exception:
+                    disconnected_hint = False
+                try:
+                    if not self._reconnect_pending and (disconnected_hint or True):
+                        self._reconnect_pending = True
+                        fc = getattr(self, 'factor_client', None)
+                        if fc is not None:
                             try:
-                                fc = getattr(self, 'factor_client', None)
-                                if fc:
-                                    # 현재 세션 정리
-                                    try:
-                                        self.running = False
-                                        self.connected = False
-                                    except Exception:
-                                        pass
-                                    try:
-                                        if self.serial_conn and self.serial_conn.is_open:
-                                            self.serial_conn.close()
-                                    except Exception:
-                                        pass
-                                    # 비동기 재연결 요청
-                                    try:
-                                        fc._reconnect_printer()
-                                    except Exception:
-                                        pass
-                            finally:
-                                try:
-                                    self._reconnect_scheduled = False
-                                except Exception:
-                                    pass
-                        threading.Thread(target=_reconn, daemon=True).start()
+                                self.logger.warning("RX 오류 감지 → 재연결 시도 트리거")
+                            except Exception:
+                                pass
+                            try:
+                                # 통신 플래그 정리
+                                self.connected = False
+                            except Exception:
+                                pass
+                            try:
+                                threading.Thread(target=fc._reconnect_printer, daemon=True).start()
+                            except Exception:
+                                pass
                 except Exception:
                     pass
                 time.sleep(1)
