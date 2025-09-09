@@ -425,7 +425,12 @@ class FactorClient:
                 time.sleep(1)
             
             # 새 연결 시도
-            self.printer_comm = PrinterCommunicator(self.config)
+            port_hint = self.printer_port if not self.auto_detect else ""
+            self.printer_comm = PrinterCommunicator(port=port_hint, baudrate=self.printer_baudrate)
+            try:
+                setattr(self.printer_comm, 'factor_client', self)
+            except Exception:
+                pass
             self.printer_comm.connect()
             
             if self.printer_comm.connected:
@@ -433,6 +438,24 @@ class FactorClient:
                 # 에러 카운트 리셋
                 self.error_count = 0
                 self.logger.info("프린터 재연결 완료 및 에러 카운트 리셋")
+                # 재연결 시 자동리포트 재설정 및 모니터 재가동
+                try:
+                    if self.printer_comm and self.printer_comm.connected:
+                        self.printer_comm.send_command("M155 S1")
+                        try:
+                            self.printer_comm.send_command("M154 S1")
+                        except Exception:
+                            pass
+                        try:
+                            self.printer_comm.send_command("M27 S5")
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                try:
+                    self._start_autoreport_monitor()
+                except Exception:
+                    pass
             else:
                 self.logger.error("프린터 재연결 실패")
                 
