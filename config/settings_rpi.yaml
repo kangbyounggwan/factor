@@ -22,8 +22,8 @@ printer:
   port: "/dev/ttyUSB0"    # CH340 USB-to-Serial 변환기
   baudrate: 115200
   firmware_type: "auto"
-  temp_poll_interval: 30.0
-  position_poll_interval: 30.0
+  temp_poll_interval: 1.0
+  position_poll_interval: 1.0
 
 # 블루투스 설정 (라즈베리파이에서 활성화)
 bluetooth:
