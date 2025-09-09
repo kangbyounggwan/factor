@@ -24,12 +24,30 @@ class MQTTService:
         self.username = self.cm.get('mqtt.username', None)
         self.password = self.cm.get('mqtt.password', None)
         self.tls = bool(self.cm.get('mqtt.tls', False))
-        client_id = f"factor-{self.cm.get('equipment.uuid','unknown')}"
+        # 고유 client_id 구성: equipment.uuid → serial → random suffix
+        try:
+            eq_uuid = (self.cm.get('equipment.uuid', None) or '').strip()
+        except Exception:
+            eq_uuid = ''
+        suffix = eq_uuid or (get_pi_serial() or '') or uuid.uuid4().hex[:8]
+        client_id = f"factor-{suffix}"
         self.client = mqtt.Client(client_id=client_id, clean_session=True)
         if self.username:
             self.client.username_pw_set(self.username, self.password or None)
         if self.tls:
             self.client.tls_set()
+
+        # 로거/재연결/큐 튜닝
+        try:
+            self.client.enable_logger(self.logger)
+        except Exception:
+            pass
+        try:
+            self.client.reconnect_delay_set(min_delay=1, max_delay=10)
+            self.client.max_queued_messages_set(2000)
+            self.client.max_inflight_messages_set(40)
+        except Exception:
+            pass
 
         self.client.on_connect = self._on_connect
         self.client.on_message = self._on_message
@@ -48,6 +66,11 @@ class MQTTService:
             self._status_interval = 1.5
         self._status_streaming = False
         self._status_thread = None
+        # keepalive 설정(기본 120초)
+        try:
+            self.keepalive = int(self.cm.get('mqtt.keepalive', 120))
+        except Exception:
+            self.keepalive = 120
 
     def _on_connect(self, client, userdata, flags, rc):
         client.subscribe(topic_cmd(self.cm), qos=1)
@@ -114,8 +137,18 @@ class MQTTService:
             qos=1,
             retain=True
         )
-        self.client.connect(self.host, self.port, keepalive=30)
+        # 비동기 연결 + 자동 재연결(loop_start)
+        try:
+            self.client.connect_async(self.host, self.port, keepalive=self.keepalive)
+        except Exception:
+            self.client.connect(self.host, self.port, keepalive=self.keepalive)
         self.client.loop_start()
+        try:
+            cid = getattr(self.client, '_client_id', b'')
+            cid_str = cid.decode('utf-8', 'ignore') if isinstance(cid, (bytes, bytearray)) else str(cid)
+            self.logger.info(f"MQTT connecting to {self.host}:{self.port} keepalive={self.keepalive} client_id={cid_str}")
+        except Exception:
+            pass
 
     def stop(self):
         if not self._running:

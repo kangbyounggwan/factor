@@ -105,9 +105,11 @@ class FactorClient:
         signal.signal(signal.SIGTERM, self._signal_handler)
         signal.signal(signal.SIGINT, self._signal_handler)
         
-        # 워치독 설정
-        self.watchdog_enabled = self.config.is_watchdog_enabled()
+        # 워치독 설정(비활성화) 및 RX 가디언 초기화
+        self.watchdog_enabled = False
         self.watchdog_thread = None
+        self._rx_guard_running = False
+        self._rx_guard_thread = None
         
         self.logger.info("Factor 클라이언트 초기화 완료")
     
@@ -148,9 +150,11 @@ class FactorClient:
         # 워커 스레드 시작
         self._start_worker_threads()
         
-        # 워치독 시작
-        if self.watchdog_enabled:
-            self._start_watchdog()
+        # RX 가디언 시작(워커 무정지 보장)
+        try:
+            self._start_rx_guardian()
+        except Exception:
+            pass
         
         # 프린터 연결 시도 (실패해도 계속 실행)
         if self._connect_to_printer():
@@ -170,6 +174,11 @@ class FactorClient:
         """클라이언트 중지"""
         self.logger.info("Factor 클라이언트 중지 중...")
         self.running = False
+        # RX 가디언 중지
+        try:
+            self._stop_rx_guardian()
+        except Exception:
+            pass
         
         # 프린터 연결 해제
         if self.printer_comm:
@@ -180,9 +189,7 @@ class FactorClient:
             if thread.is_alive():
                 thread.join(timeout=5)
         
-        # 워치독 중지
-        if self.watchdog_thread and self.watchdog_thread.is_alive():
-            self.watchdog_thread.join(timeout=5)
+        # 워치독 사용 안 함
         
         self.connected = False
         self._trigger_callback('on_disconnect', None)
@@ -359,81 +366,8 @@ class FactorClient:
                 break
     
     def _start_watchdog(self):
-        """워치독 스레드 시작"""
-        def watchdog_worker():
-            while self.running:
-                try:
-                    current_time = time.time()
-                    time_since_heartbeat = current_time - self.last_heartbeat
-                    
-                    # 하트비트 상태 상세 로깅
-                    self.logger.debug(f"워치독 체크 - 마지막 하트비트: {time_since_heartbeat:.1f}초 전")
-                    
-                    # 하트비트 타임아웃 체크
-                    if time_since_heartbeat > 60:  # 60초 타임아웃
-                        self.logger.error(f"하트비트 타임아웃 발생!")
-                        self.logger.error(f"  - 마지막 하트비트: {time_since_heartbeat:.1f}초 전")
-                        self.logger.error(f"  - 현재 시간: {datetime.fromtimestamp(current_time)}")
-                        self.logger.error(f"  - 마지막 하트비트 시간: {datetime.fromtimestamp(self.last_heartbeat)}")
-                        
-                        # 각 명령별 응답 시간 분석
-                        temp_time_since = current_time - self.last_temperature_response
-                        pos_time_since = current_time - self.last_position_response
-                        gcode_time_since = current_time - self.last_gcode_response
-                        state_time_since = current_time - self.last_state_response
-                        
-                        self.logger.error(f"  - 명령별 응답 상태:")
-                        self.logger.error(f"    * M105 (온도): {temp_time_since:.1f}초 전")
-                        self.logger.error(f"    * M114 (위치): {pos_time_since:.1f}초 전")
-                        self.logger.error(f"    * G-code: {gcode_time_since:.1f}초 전")
-                        self.logger.error(f"    * 상태 변경: {state_time_since:.1f}초 전")
-                        
-                        # 가장 오래된 응답 찾기
-                        oldest_response = min(temp_time_since, pos_time_since, gcode_time_since, state_time_since)
-                        if oldest_response == temp_time_since:
-                            self.logger.error(f"  - 하트비트 타임아웃 원인: M105 (온도) 명령에 응답하지 않음")
-                        elif oldest_response == pos_time_since:
-                            self.logger.error(f"  - 하트비트 타임아웃 원인: M114 (위치) 명령에 응답하지 않음")
-                        elif oldest_response == gcode_time_since:
-                            self.logger.error(f"  - 하트비트 타임아웃 원인: G-code 명령에 응답하지 않음")
-                        else:
-                            self.logger.error(f"  - 하트비트 타임아웃 원인: 프린터 상태 변경에 응답하지 않음")
-                        
-                        # 프린터 연결 상태 상세 정보
-                        if self.printer_comm:
-                            self.logger.error(f"  - 프린터 통신 상태: {self.printer_comm.connected}")
-                            self.logger.error(f"  - 프린터 포트: {self.printer_comm.port}")
-                            self.logger.error(f"  - 프린터 상태: {self.printer_comm.state}")
-                        else:
-                            self.logger.error("  - 프린터 통신 객체가 없음")
-                        
-                        # 시스템 상태 정보
-                        self.logger.error(f"  - 클라이언트 연결 상태: {self.connected}")
-                        self.logger.error(f"  - 클라이언트 실행 상태: {self.running}")
-                        
-                        # 스레드 상태 확인
-                        active_threads = [t for t in self.polling_threads if t.is_alive()]
-                        self.logger.error(f"  - 활성 폴링 스레드: {len(active_threads)}/{len(self.polling_threads)}")
-                        
-                        # 하트비트 타임아웃 복구 시도
-                        self._attempt_heartbeat_recovery()
-                        
-                        self._handle_error("heartbeat_timeout")
-                    
-                    # 메모리 사용량 확인
-                    memory_percent = psutil.virtual_memory().percent
-                    if memory_percent > 90:
-                        self.logger.warning(f"메모리 사용량 높음: {memory_percent}%")
-                    
-                    time.sleep(30)  # 30초마다 확인
-                    
-                except Exception as e:
-                    self.logger.error(f"워치독 오류: {e}", exc_info=True)
-                    time.sleep(30)
-        
-        self.watchdog_thread = threading.Thread(target=watchdog_worker, daemon=True)
-        self.watchdog_thread.start()
-        self.logger.info("워치독 시작")
+        """워치독 비활성화 (의도적으로 사용하지 않음)"""
+        self.logger.info("워치독 비활성화 상태 - 시작하지 않음")
     
     def _handle_error(self, error_type: str):
         """오류 처리"""
@@ -450,7 +384,7 @@ class FactorClient:
         self.logger.error(f"시스템 상태:")
         self.logger.error(f"  - 클라이언트 실행 중: {self.running}")
         self.logger.error(f"  - 프린터 연결됨: {self.connected}")
-        self.logger.error(f"  - 마지막 하트비트: {datetime.fromtimestamp(self.last_heartbeat)}")
+        # 하트비트 의존 제거
         
         if self.printer_comm:
             self.logger.error(f"  - 프린터 통신 상태: {self.printer_comm.connected}")
@@ -486,53 +420,8 @@ class FactorClient:
                 self.stop()
     
     def _attempt_heartbeat_recovery(self):
-        """하트비트 타임아웃 복구 시도"""
-        try:
-            self.logger.info("하트비트 복구 시도 시작")
-            
-            # 1. 프린터 통신 상태 확인
-            if not self.printer_comm or not self.printer_comm.connected:
-                self.logger.warning("프린터 통신이 끊어짐 - 재연결 시도")
-                self._reconnect_printer()
-                return
-            
-            # 2. 프린터 상태 확인 명령 전송
-            self.logger.info("프린터 상태 확인 명령 전송 (M115)")
-            self.printer_comm.send_command("M115")
-            
-            # 3. 온도 확인 명령 전송
-            self.logger.info("온도 확인 명령 전송 (M105)")
-            self.printer_comm.send_command("M105")
-            
-            # 4. 위치 확인 명령 전송
-            self.logger.info("위치 확인 명령 전송 (M114)")
-            self.printer_comm.send_command("M114")
-            
-            # 5. 짧은 대기 후 응답 확인
-            time.sleep(2)
-            
-            # 6. 응답이 있었는지 확인
-            current_time = time.time()
-            temp_time_since = current_time - self.last_temperature_response
-            pos_time_since = current_time - self.last_position_response
-            gcode_time_since = current_time - self.last_gcode_response
-            
-            if temp_time_since < 5 or pos_time_since < 5 or gcode_time_since < 5:
-                self.logger.info("하트비트 복구 성공 - 프린터 응답 확인됨")
-                # 하트비트 시간 업데이트
-                self.last_heartbeat = current_time
-                self.last_temperature_response = current_time
-                self.last_position_response = current_time
-                self.last_gcode_response = current_time
-                self.last_state_response = current_time
-                # 에러 카운트 리셋
-                self.error_count = 0
-                self.logger.info("하트비트 시간 초기화 완료 및 에러 카운트 리셋")
-            else:
-                self.logger.warning("하트비트 복구 실패 - 프린터 응답 없음")
-                
-        except Exception as e:
-            self.logger.error(f"하트비트 복구 시도 중 오류: {e}")
+        """하트비트 기능 제거: 더 이상 사용하지 않음"""
+        self.logger.debug("_attempt_heartbeat_recovery 호출됨 - 무시")
     
     def _reconnect_printer(self):
         """프린터 재연결 시도"""
@@ -550,13 +439,6 @@ class FactorClient:
             
             if self.printer_comm.connected:
                 self.logger.info("프린터 재연결 성공")
-                # 하트비트 시간 초기화
-                current_time = time.time()
-                self.last_heartbeat = current_time
-                self.last_temperature_response = current_time
-                self.last_position_response = current_time
-                self.last_gcode_response = current_time
-                self.last_state_response = current_time
                 # 에러 카운트 리셋
                 self.error_count = 0
                 self.logger.info("프린터 재연결 완료 및 에러 카운트 리셋")
@@ -627,44 +509,21 @@ class FactorClient:
         old_state_name = old_state.state if old_state else "None"
         
         self.printer_status = status
-        self.last_heartbeat = time.time()
-        self.last_state_response = time.time()  # 상태 변경 응답 시간 업데이트
-        
-        # 하트비트 업데이트 상세 로깅 (DEBUG 레벨로 변경)
-        self.logger.debug(f"하트비트 업데이트 - 프린터 상태 변경: {old_state_name} → {status.state}")
-        self.logger.debug(f"  - 하트비트 시간: {datetime.fromtimestamp(self.last_heartbeat)}")
-        self.logger.debug(f"  - 상태 플래그: {status.flags}")
-        self.logger.debug(f"  - 트리거: 프린터 상태 변경 콜백")
+        # 하트비트 의존 제거
         
         self._trigger_callback('on_printer_state_change', status)
         self.logger.info(f"프린터 상태 변경: {status.state}")
     
     def _on_temperature_update(self, temp_info: TemperatureInfo):
         """온도 업데이트 콜백"""
-        # 온도 업데이트 시에도 하트비트 업데이트
-        self.last_heartbeat = time.time()
-        self.last_temperature_response = time.time()  # M105 응답 시간 업데이트
-        
-        # 하트비트 업데이트 상세 로깅 (DEBUG 레벨로 변경)
-        self.logger.debug(f"하트비트 업데이트 - 온도 업데이트")
-        self.logger.debug(f"  - 하트비트 시간: {datetime.fromtimestamp(self.last_heartbeat)}")
-        self.logger.debug(f"  - 온도 정보: {temp_info}")
-        self.logger.debug(f"  - 트리거: 온도 업데이트 콜백 (M105 응답)")
+        # 하트비트 의존 제거
         
         self._trigger_callback('on_temperature_update', temp_info)
         self.logger.debug(f"온도 업데이트: {temp_info}")
     
     def _on_position_update(self, position: Position):
         """위치 업데이트 콜백"""
-        # 위치 업데이트 시에도 하트비트 업데이트
-        self.last_heartbeat = time.time()
-        self.last_position_response = time.time()  # M114 응답 시간 업데이트
-        
-        # 하트비트 업데이트 상세 로깅 (DEBUG 레벨로 변경)
-        self.logger.debug(f"하트비트 업데이트 - 위치 업데이트")
-        self.logger.debug(f"  - 하트비트 시간: {datetime.fromtimestamp(self.last_heartbeat)}")
-        self.logger.debug(f"  - 위치 정보: {position}")
-        self.logger.debug(f"  - 트리거: 위치 업데이트 콜백 (M114 응답)")
+        # 하트비트 의존 제거
         
         self.position_data = position
         self._trigger_callback('on_position_update', position)
@@ -672,15 +531,7 @@ class FactorClient:
     
     def _on_gcode_response(self, response):
         """G-code 응답 콜백"""
-        # G-code 응답 시에도 하트비트 업데이트
-        self.last_heartbeat = time.time()
-        self.last_gcode_response = time.time()  # G-code 응답 시간 업데이트
-        
-        # 하트비트 업데이트 상세 로깅 (DEBUG 레벨로 변경)
-        self.logger.debug(f"하트비트 업데이트 - G-code 응답")
-        self.logger.debug(f"  - 하트비트 시간: {datetime.fromtimestamp(self.last_heartbeat)}")
-        self.logger.debug(f"  - G-code 응답: {response.response}")
-        self.logger.debug(f"  - 트리거: G-code 응답 콜백")
+        # 하트비트 의존 제거
         
         self._trigger_callback('on_gcode_response', response)
         self._trigger_callback('on_message', response.response)

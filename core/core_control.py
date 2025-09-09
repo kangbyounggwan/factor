@@ -231,6 +231,14 @@ class ControlModule:
         if not pc.connected or not (pc.serial_conn and pc.serial_conn.is_open):
             pc.logger.warning("프린터가 연결되지 않음")
             return None
+
+        # 이전 스냅샷(타임스탬프/라인 기반)
+        last_temp_time_before = float(getattr(pc, '_last_temp_time', 0.0) or 0.0)
+        last_pos_time_before  = float(getattr(pc, '_last_pos_time', 0.0)  or 0.0)
+        last_temp_line_before = getattr(pc, '_last_temp_line', None)
+        last_pos_line_before  = getattr(pc, '_last_pos_line', None)
+        last_resp_before      = getattr(pc, 'last_response', None)
+
         # 1) TX는 잠깐 락으로 보호하고, RX는 읽기 워커에 맡긴다
         try:
             pc.logger.debug(f"[SYNC_TX] {command!r}")
@@ -243,31 +251,58 @@ class ControlModule:
 
         # 2) 읽기 워커가 적재하는 공유 상태 변화 감시로 응답 대기
         deadline = time.monotonic() + timeout
-        last_temp_line_before = getattr(pc, '_last_temp_line', None)
-        last_pos_line_before = getattr(pc, '_last_pos_line', None)
-        last_resp_before = getattr(pc, 'last_response', None)
+        cmd_up = command.upper()
 
         while time.monotonic() < deadline:
             try:
                 lr = getattr(pc, 'last_response', None)
-                # M105: 온도 라인 갱신 또는 ok 수신 시 완료
-                if command.upper().startswith('M105'):
+
+                # M105: 타임스탬프 기반 우선, 보조로 문자열 판정
+                if cmd_up.startswith('M105'):
+                    # 타임스탬프 증가 → 새 온도 수신
+                    if float(getattr(pc, '_last_temp_time', 0.0) or 0.0) > last_temp_time_before:
+                        return getattr(pc, '_last_temp_line', lr)
+                    # 라인 스냅샷 변경
                     if getattr(pc, '_last_temp_line', None) != last_temp_line_before:
                         return getattr(pc, '_last_temp_line', lr)
+                    # 최근 응답에 T: 또는 ok 포함되면 수용
                     if isinstance(lr, str) and (('T:' in lr) or lr.lower().startswith('ok')) and lr != last_resp_before:
                         return lr
-                # M114: 위치 라인 갱신 또는 ok 수신 시 완료
-                elif command.upper().startswith('M114'):
+
+                # M114: 타임스탬프 기반 우선, 보조로 문자열 판정 + ok 접두 처리
+                elif cmd_up.startswith('M114'):
+                    # 타임스탬프 증가 → 새 위치 수신
+                    if float(getattr(pc, '_last_pos_time', 0.0) or 0.0) > last_pos_time_before:
+                        return getattr(pc, '_last_pos_line', lr)
+                    # 라인 스냅샷 변경
                     if getattr(pc, '_last_pos_line', None) != last_pos_line_before:
                         return getattr(pc, '_last_pos_line', lr)
-                    if isinstance(lr, str) and (('X:' in lr) or lr.lower().startswith('ok')) and lr != last_resp_before:
+                    # 원문에 X:가 있으면 그 지점부터 잘라 반환(파서 보장)
+                    if isinstance(lr, str) and lr != last_resp_before:
+                        ix = lr.find('X:')
+                        if ix >= 0:
+                            return lr[ix:]
+                        lrl = lr.lower()
+                        ixl = lrl.find('x:')
+                        if ixl >= 0:
+                            return lr[ixl:]
+                        if lrl.startswith('ok'):
+                            s = lr[2:].lstrip()
+                            ix2 = s.find('X:')
+                            if ix2 >= 0:
+                                return s[ix2:]
+                    # ok 만 와도 새 라인이면 반환(콜렉터 보조 처리)
+                    if isinstance(lr, str) and lr.lower().startswith('ok') and lr != last_resp_before:
                         return lr
+
                 else:
                     # 일반 명령: 새로운 응답 한 줄이라도 들어오면 반환
                     if lr is not None and lr != last_resp_before:
                         return lr
+
             except Exception:
                 pass
+
             remaining = deadline - time.monotonic()
             time.sleep(0.02 if remaining > 0.02 else max(0.0, remaining))
 
