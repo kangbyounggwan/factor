@@ -158,16 +158,19 @@ class MQTTService:
             pass
 
     def _handle_sd_list_request(self):
+        # 웹 API를 통해 위임하여 결과 반환
         ok = False
         files = []
         error = ""
         try:
-            fc = self.fc
-            pc = getattr(fc, 'printer_comm', None) if fc else None
-            if pc and getattr(pc, 'connected', False):
-                files, ok, error = self._get_sd_list_via_cache_or_query(pc)
+            status, resp = self._get_local_api('/printer/sd/list')
+            if status and isinstance(resp, dict):
+                ok = bool(resp.get('success', False))
+                files = list(resp.get('files') or []) if ok else []
+                if not ok:
+                    error = str(resp.get('error') or '')
             else:
-                error = "printer not connected"
+                error = str(resp or 'api error')
         except Exception as e:
             error = str(e)
 
@@ -179,12 +182,7 @@ class MQTTService:
             "timestamp": int(time.time() * 1000),
         }
         try:
-            self.client.publish(
-                self.sd_list_result_topic,
-                json.dumps(payload, ensure_ascii=False),
-                qos=1,
-                retain=False
-            )
+            self.client.publish(self.sd_list_result_topic, json.dumps(payload, ensure_ascii=False), qos=1, retain=False)
         except Exception:
             pass
 
@@ -336,6 +334,40 @@ class MQTTService:
         except Exception:
             body = b'{}'
         req = urllib.request.Request(url, data=body, headers={'Content-Type': 'application/json'}, method='POST')
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                code = getattr(resp, 'status', 200)
+                text = resp.read().decode('utf-8', 'ignore')
+                try:
+                    import json as _json
+                    data = _json.loads(text) if text else {}
+                except Exception:
+                    data = {'raw': text}
+                if 200 <= code < 300:
+                    return True, data
+                return False, data
+        except urllib.error.HTTPError as e:
+            try:
+                text = e.read().decode('utf-8', 'ignore')
+            except Exception:
+                text = str(e)
+            return False, text
+        except Exception as e:
+            return False, str(e)
+
+    def _get_local_api(self, path: str, timeout: float = 5.0):
+        """로컬 Flask API로 GET. 성공시 (True, resp_json), 실패시 (False, error_msg)"""
+        try:
+            import urllib.request
+            import urllib.error
+        except Exception:
+            return False, 'urllib not available'
+        try:
+            port =  int(self.cm.get('server.port', 5000)) if hasattr(self, 'cm') else 5000
+        except Exception:
+            port = 5000
+        url = f"http://127.0.0.1:{port}/api{path}"
+        req = urllib.request.Request(url, method='GET')
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 code = getattr(resp, 'status', 200)

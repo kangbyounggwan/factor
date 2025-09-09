@@ -663,6 +663,20 @@ def sd_cancel_print():
             except Exception:
                 pass
 
+            # 3-1) 완전 초기화: 파일 포인터 0으로, SD 언마운트 후 재마운트
+            try:
+                pc.send_command('M26 S0')  # 파일 포인터 0으로
+            except Exception:
+                pass
+            try:
+                pc.send_command_and_wait('M22', timeout=5.0)  # SD 언마운트
+            except Exception:
+                pass
+            try:
+                pc.send_command_and_wait('M21', timeout=5.0)  # SD 재마운트
+            except Exception:
+                pass
+
         # 4) 자동 리포트는 유지 (항상 온도/위치/출력 활성정보 켜둠)
 
         # 5) 안전 파킹/쿨다운(선택)
@@ -713,7 +727,7 @@ def upload_sd_file():
         if not fc or not hasattr(fc, 'printer_comm'):
             return jsonify({'success': False, 'error': 'Factor client not available'}), 503
         pc = fc.printer_comm
-        # cooling/finishing 단계 차단
+
         try:
             if hasattr(pc, 'control') and pc.control:
                 phase = pc.control.get_phase_snapshot().get('phase', 'unknown')
