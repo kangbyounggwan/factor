@@ -32,8 +32,11 @@ def handle_command(mqtt_client, cm, fc, payload: dict):
             fc.printer_comm.send_command("M114")
             _publish_admin_result(mqtt_client, True, cmd, "sent")
         elif cmd == 'm27' and getattr(fc, 'printer_comm', None):
-            fc.printer_comm.send_command("M27")
-            _publish_admin_result(mqtt_client, True, cmd, "sent")
+            try:
+                resp = fc.printer_comm.send_command_and_wait("M27", timeout=3.0)
+                _publish_admin_result(mqtt_client, True, cmd, f"resp: {resp}")
+            except Exception as e:
+                _publish_admin_result(mqtt_client, False, cmd, f"error: {e}")
         elif cmd == 'reboot':
             import subprocess
             subprocess.Popen(['sudo', 'reboot'])

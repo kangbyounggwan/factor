@@ -129,6 +129,7 @@ class FactorClient:
         self.M27_auto_supported: Optional[bool] = None   # 진행률 자동리포트
         self._temp_poll_thread: Optional[threading.Thread] = None
         self._pos_poll_thread: Optional[threading.Thread] = None
+        self._m27_poll_thread: Optional[threading.Thread] = None
 
         # sudo 비밀번호(재부팅 시도에 사용; 환경변수로 주입 권장)
         try:
@@ -368,7 +369,22 @@ class FactorClient:
         while self.running and self.connected and (self.M155_auto_supported is False):
             try:
                 if self.printer_comm and self.printer_comm.connected:
-                    self.printer_comm.send_command("M105")
+                    # 동기 조회로 확실히 응답을 받고 파싱 반영
+                    ti = None
+                    try:
+                        ti = self.printer_comm.collector.get_temperature_info()
+                    except Exception:
+                        ti = None
+                    if ti is not None:
+                        try:
+                            self.logger.info(f"[TEMP_POLL] {ti.to_dict()}")
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            self.logger.info("[TEMP_POLL] no response")
+                        except Exception:
+                            pass
             except Exception:
                 pass
             next_ts += interval
@@ -383,7 +399,45 @@ class FactorClient:
         while self.running and self.connected and (self.M154_auto_supported is False):
             try:
                 if self.printer_comm and self.printer_comm.connected:
-                    self.printer_comm.send_command("M114")
+                    # 동기 조회로 확실히 응답을 받고 파싱 반영
+                    p = None
+                    try:
+                        p = self.printer_comm.collector.get_position()
+                    except Exception:
+                        p = None
+                    if p is not None:
+                        try:
+                            self.logger.info(f"[POS_POLL] {p.to_dict()}")
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            self.logger.info("[POS_POLL] no response")
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            next_ts += interval
+            sleep_for = max(0.0, next_ts - time.monotonic())
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+
+    def _fallback_m27_poll_worker(self):
+        """M27 진행률 폴링(오토리포트 미사용, 동기 조회)"""
+        interval = 1.0  # 1초 주기 고정
+        next_ts = time.monotonic()
+        while self.running and self.connected:
+            try:
+                if self.printer_comm and self.printer_comm.connected:
+                    try:
+                        r = self.printer_comm.send_command_and_wait("M27", timeout=2.0)
+                        if r:
+                            try:
+                                self.logger.info(f"[M27_POLL] {r.strip()}")
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
             except Exception:
                 pass
             next_ts += interval
@@ -420,17 +474,8 @@ class FactorClient:
                 self.M154_auto_supported = False
                 self.logger.info(f"M154 S1 지원 안 함/오류: {e}")
 
-            # SD 진행률 자동리포트 (M27)
-            self.M27_auto_supported = None
-            try:
-                r3 = self.printer_comm.send_command_and_wait("M27 S5", timeout=2.0)
-                r3l = ((r3 or "").strip().lower())
-                # M27은 ok 또는 'not sd printing'이면 지원으로 간주
-                self.M27_auto_supported = ("unknown command" not in r3l) and (("ok" in r3l) or ("not sd printing" in r3l))
-                self.logger.info(f"M27 S5 support={self.M27_auto_supported} resp={r3!r}")
-            except Exception as e:
-                self.M27_auto_supported = False
-                self.logger.info(f"M27 S5 지원 안 함/오류: {e}")
+            # SD 진행률 자동리포트(M27 S5)는 사용하지 않음. 동기 조회로 대체.
+            self.M27_auto_supported = False
 
             # 미지원 항목 폴링 스레드 시작
             if self.M155_auto_supported is False and self._temp_poll_thread is None:
@@ -443,6 +488,13 @@ class FactorClient:
                 try:
                     self._pos_poll_thread = threading.Thread(target=self._fallback_pos_poll_worker, daemon=True)
                     self._pos_poll_thread.start()
+                except Exception:
+                    pass
+            # M27은 오토리포트 사용하지 않고 항상 1초 주기 동기 폴링
+            if self._m27_poll_thread is None:
+                try:
+                    self._m27_poll_thread = threading.Thread(target=self._fallback_m27_poll_worker, daemon=True)
+                    self._m27_poll_thread.start()
                 except Exception:
                     pass
             # 요약 로그

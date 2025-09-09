@@ -612,11 +612,7 @@ def sd_print_file():
         if ok2 is False:
             return jsonify({'success': False, 'error': 'failed to start SD print (M24)'}), 500
 
-        # SD 진행률 오토리포트(M27 S5) 등록 및 캐시 초기화
-        try:
-            pc.send_command('M27 S5')
-        except Exception:
-            pass
+        # SD 진행률 조회는 동기 조회로 필요 시 요청 측에서 수행
         try:
             setattr(fc, '_sd_progress_cache', {
                 'active': True,
