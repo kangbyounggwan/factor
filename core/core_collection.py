@@ -131,6 +131,12 @@ class DataCollectionModule:
     def _handle_temp_via_handler(self, line: str) -> bool:
         ti = self.pc.printer_handler.parse_temperature(line)
         if ti:
+            # 캐시/타임스탬프 갱신 (핸들러 경로에서도 일관 유지)
+            try:
+                self.pc._last_temp_info = ti
+                self.pc._last_temp_time = time.time()
+            except Exception:
+                pass
             self.pc._trigger_callback('on_temperature_update', ti)
             self.pc._last_temp_line = line
             return True
@@ -141,6 +147,10 @@ class DataCollectionModule:
         if pos:
             self.pc.current_position = pos
             self.pc._trigger_callback('on_position_update', pos)
+            try:
+                self.pc._last_pos_time = time.time()
+            except Exception:
+                pass
             self.pc._last_pos_line = line
             return True
         return False
