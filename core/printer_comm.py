@@ -147,6 +147,8 @@ class PrinterCommunicator:
         # 분리된 모듈 초기화
         self.control = ControlModule(self)
         self.collector = DataCollectionModule(self)
+        # 내부 재연결 스케줄러 플래그
+        self._reconnect_scheduled = False
     
     def add_callback(self, event_type: str, callback: Callable):
         """콜백 함수 추가"""
@@ -350,6 +352,38 @@ class PrinterCommunicator:
                 
             except Exception as e:
                 self.logger.error(f"시리얼 읽기 오류: {e}")
+                # 읽기 실패 시 재연결 루프 스케줄
+                try:
+                    if not getattr(self, '_reconnect_scheduled', False):
+                        self._reconnect_scheduled = True
+                        def _reconn():
+                            try:
+                                fc = getattr(self, 'factor_client', None)
+                                if fc:
+                                    # 현재 세션 정리
+                                    try:
+                                        self.running = False
+                                        self.connected = False
+                                    except Exception:
+                                        pass
+                                    try:
+                                        if self.serial_conn and self.serial_conn.is_open:
+                                            self.serial_conn.close()
+                                    except Exception:
+                                        pass
+                                    # 비동기 재연결 요청
+                                    try:
+                                        fc._reconnect_printer()
+                                    except Exception:
+                                        pass
+                            finally:
+                                try:
+                                    self._reconnect_scheduled = False
+                                except Exception:
+                                    pass
+                        threading.Thread(target=_reconn, daemon=True).start()
+                except Exception:
+                    pass
                 time.sleep(1)
     
     def _send_worker(self):

@@ -123,6 +123,13 @@ class FactorClient:
         self._last_temp_update_ts = 0.0
         self._last_pos_update_ts = 0.0
 
+        # 오토리포트 지원/폴링 스레드 상태 (개별 코드별로 관리)
+        self.M155_auto_supported: Optional[bool] = None  # 온도 자동리포트
+        self.M154_auto_supported: Optional[bool] = None  # 위치 자동리포트
+        self.M27_auto_supported: Optional[bool] = None   # 진행률 자동리포트
+        self._temp_poll_thread: Optional[threading.Thread] = None
+        self._pos_poll_thread: Optional[threading.Thread] = None
+
         self.logger.info("Factor 클라이언트 초기화 완료")
     
     def add_callback(self, event_type: str, callback: Callable):
@@ -171,24 +178,59 @@ class FactorClient:
         # 프린터 연결 시도 (실패해도 계속 실행)
         if self._connect_to_printer():
             self.connected = True
-            # 시작 즉시 자동리포트 강제 설정(S1)
+            # 시작 즉시 자동리포트 시도(S1). 미지원이면 폴링으로 전환
             try:
                 if self.printer_comm and self.printer_comm.connected:
-                    self.printer_comm.send_command("M155 S1")  # 온도 자동리포트 1초
+                    # 온도 자동리포트 지원 여부 확인 (동기 응답 검사)
+                    self.M155_auto_supported = None
                     try:
-                        self.printer_comm.send_command("M154 S1")  # 위치 자동리포트(지원 시)
-                    except Exception:
-                        pass
+                        r = self.printer_comm.send_command_and_wait("M155 S1", timeout=2.0)
+                        rl = (r or "").strip().lower()
+                        self.M155_auto_supported = ("unknown command" not in rl)
+                        self.logger.info(f"M155 S1 support={self.M155_auto_supported} resp={r!r}")
+                    except Exception as e:
+                        self.M155_auto_supported = False
+                        self.logger.info(f"M155 S1 지원 안 함/오류: {e}")
+
+                    # 위치 자동리포트 지원 여부 확인 (동기 응답 검사)
+                    self.M154_auto_supported = None
                     try:
-                        self.printer_comm.send_command("M27 S1")   # SD 진행률 5초
-                    except Exception:
-                        pass
+                        r2 = self.printer_comm.send_command_and_wait("M154 S1", timeout=2.0)
+                        r2l = (r2 or "").strip().lower()
+                        self.M154_auto_supported = ("unknown command" not in r2l)
+                        self.logger.info(f"M154 S1 support={self.M154_auto_supported} resp={r2!r}")
+                    except Exception as e:
+                        self.M154_auto_supported = False
+                        self.logger.info(f"M154 S1 지원 안 함/오류: {e}")
+
+                    # SD 진행률 오토리포트는 유지(가능 시)
+                    try:
+                        r3 = self.printer_comm.send_command_and_wait("M27 S5", timeout=2.0)
+                        r3l = (r3 or "").strip().lower()
+                        self.M27_auto_supported = ("unknown command" not in r3l)
+                        self.logger.info(f"M27 S5 support={self.M27_auto_supported} resp={r3!r}")
+                    except Exception as e:
+                        self.M27_auto_supported = False
+                        self.logger.info(f"M27 S5 지원 안 함/오류: {e}")
             except Exception:
                 pass
 
             # 자동리포트 모니터 시작(S0→S1 토글)
             try:
                 self._start_autoreport_monitor()
+            except Exception:
+                pass
+            # 오토리포트 미지원 항목에 대해 폴링 스레드 기동
+            try:
+                if self.M155_auto_supported is False and self._temp_poll_thread is None:
+                    self._temp_poll_thread = threading.Thread(target=self._fallback_temp_poll_worker, daemon=True)
+                    self._temp_poll_thread.start()
+            except Exception:
+                pass
+            try:
+                if self.M154_auto_supported is False and self._pos_poll_thread is None:
+                    self._pos_poll_thread = threading.Thread(target=self._fallback_pos_poll_worker, daemon=True)
+                    self._pos_poll_thread.start()
             except Exception:
                 pass
             # 폴링 스레드 시작 제거(자동리포트만 사용)
@@ -327,7 +369,8 @@ class FactorClient:
                     if not (pc and pc.connected):
                         time.sleep(CHECK_INTERVAL); continue
 
-                    if (now - self._last_temp_update_ts) > STALE_SEC_TEMP and (now - self._last_toggle_ts_temp) > TOGGLE_COOLDOWN:
+                    # 온도: 자동리포트 지원 시에만 토글, 미지원이면 폴링 스레드가 담당
+                    if bool(self.M155_auto_supported) and ((now - self._last_temp_update_ts) > STALE_SEC_TEMP) and ((now - self._last_toggle_ts_temp) > TOGGLE_COOLDOWN):
                         try:
                             pc.send_command("M155 S0"); time.sleep(0.1)
                             pc.send_command("M155 S1")
@@ -335,7 +378,8 @@ class FactorClient:
                             pass
                         self._last_toggle_ts_temp = now
 
-                    if (now - self._last_pos_update_ts) > STALE_SEC_POS and (now - self._last_toggle_ts_pos) > TOGGLE_COOLDOWN:
+                    # 위치: 자동리포트 지원 시에만 토글, 미지원이면 폴링 스레드가 담당
+                    if bool(self.M154_auto_supported) and ((now - self._last_pos_update_ts) > STALE_SEC_POS) and ((now - self._last_toggle_ts_pos) > TOGGLE_COOLDOWN):
                         try:
                             pc.send_command("M154 S0"); time.sleep(0.1)
                             pc.send_command("M154 S1")
@@ -357,6 +401,37 @@ class FactorClient:
         except Exception:
             pass
         self._arm_thread = None
+
+    # ===== Fallback polling workers (자동리포트 미지원 시만 사용) =====
+    def _fallback_temp_poll_worker(self):
+        """온도 폴링(자동리포트가 미지원인 펌웨어용)"""
+        interval = float(getattr(self, "temp_poll_interval", 1.0))
+        next_ts = time.monotonic()
+        while self.running and self.connected and (self._auto_temp_supported is False):
+            try:
+                if self.printer_comm and self.printer_comm.connected:
+                    self.printer_comm.send_command("M105")
+            except Exception:
+                pass
+            next_ts += interval
+            sleep_for = max(0.0, next_ts - time.monotonic())
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+
+    def _fallback_pos_poll_worker(self):
+        """위치 폴링(자동리포트가 미지원인 펌웨어용)"""
+        interval = float(getattr(self, "position_poll_interval", 2.0))
+        next_ts = time.monotonic()
+        while self.running and self.connected and (self._auto_pos_supported is False):
+            try:
+                if self.printer_comm and self.printer_comm.connected:
+                    self.printer_comm.send_command("M114")
+            except Exception:
+                pass
+            next_ts += interval
+            sleep_for = max(0.0, next_ts - time.monotonic())
+            if sleep_for > 0:
+                time.sleep(sleep_for)
     
     
     def _handle_error(self, error_type: str):
