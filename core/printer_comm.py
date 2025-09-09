@@ -4,6 +4,10 @@
 """
 
 import serial
+import os
+import glob
+import stat
+import serial.tools.list_ports as lp
 import json
 import threading
 import time
@@ -36,6 +40,60 @@ from .printer_types import (
 # 분리된 제어/데이터 취득 모듈
 from .core_control import ControlModule
 from .core_collection import DataCollectionModule
+
+# ===== 안정 포트 탐색/초기화 유틸 =====
+def _is_char_device(path: str) -> bool:
+    try:
+        st = os.stat(path, follow_symlinks=False)
+        return stat.S_ISCHR(st.st_mode)
+    except Exception:
+        return False
+
+
+def _cleanup_dead_nodes(patterns: List[str] = None) -> None:
+    patterns = patterns or ["/dev/ttyUSB*", "/dev/ttyACM*"]
+    for patt in patterns:
+        for p in glob.glob(patt):
+            try:
+                if not _is_char_device(p):
+                    os.remove(p)
+            except Exception:
+                # 권한 부족/경합 등은 무시
+                pass
+
+
+def _iter_candidate_ports() -> List[str]:
+    # 1) udev 심링크 우선
+    yield "/dev/printer"
+    # 2) 안정 경로 by-id
+    for p in sorted(glob.glob("/dev/serial/by-id/*")):
+        yield p
+    # 3) 일반 경로(USB/ACM)
+    for patt in ("/dev/ttyUSB*", "/dev/ttyACM*"):
+        for p in sorted(glob.glob(patt)):
+            yield p
+    # 4) pyserial 열거(후순위)
+    for c in lp.comports():
+        yield c.device
+
+
+def _probe_serial_port(device_path: str, baudrate: int = 115200) -> bool:
+    try:
+        with serial.Serial(device_path, baudrate, timeout=1, write_timeout=1, rtscts=False, dsrdtr=False) as s:
+            try:
+                s.dtr = False
+                time.sleep(0.2)
+                s.dtr = True
+            except Exception:
+                pass
+            try:
+                s.reset_input_buffer()
+                s.reset_output_buffer()
+            except Exception:
+                pass
+        return True
+    except Exception:
+        return False
 
 
 class PrinterState(Enum):
@@ -163,35 +221,27 @@ class PrinterCommunicator:
     
 
     def _auto_detect_port(self) -> Optional[str]:
-        """프린터 포트 자동 감지"""
-        import serial.tools.list_ports
-        
+        """프린터 포트 자동 감지(안정 경로 우선 + 죽은 노드 정리 + ttyACM 포함)"""
         self.logger.info("프린터 포트 자동 감지 중...")
-        
-        # 일반적인 3D 프린터 VID/PID
-        known_vendors = [
-            (0x2341, None),  # Arduino
-            (0x1A86, 0x7523), # CH340
-            (0x0403, 0x6001), # FTDI
-            (0x10C4, 0xEA60), # CP210x
-            (0x2E8A, 0x0005), # Raspberry Pi Pico
-        ]
-        
-        ports = serial.tools.list_ports.comports()
-        
-        for port in ports:
-            # VID/PID 확인
-            for vid, pid in known_vendors:
-                if port.vid == vid and (pid is None or port.pid == pid):
-                    self.logger.info(f"프린터 포트 감지: {port.device} ({port.description})")
-                    return port.device
-            
-            # 설명으로 확인
-            if any(keyword in port.description.lower() for keyword in 
-                   ['arduino', 'ch340', 'ftdi', 'cp210', 'usb serial']):
-                self.logger.info(f"프린터 포트 감지: {port.device} ({port.description})")
-                return port.device
-        
+        # 0) 죽은 노드 정리
+        try:
+            _cleanup_dead_nodes()
+        except Exception:
+            pass
+
+        # 1) 후보 순회
+        for dev in _iter_candidate_ports():
+            try:
+                if not os.path.exists(dev):
+                    continue
+                if not os.path.islink(dev) and not _is_char_device(dev):
+                    continue
+                if _probe_serial_port(dev, self.baudrate):
+                    self.logger.info(f"프린터 포트 감지: {dev}")
+                    return dev
+            except Exception:
+                continue
+
         self.logger.warning("프린터 포트를 자동으로 찾을 수 없습니다")
         return None
     
