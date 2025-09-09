@@ -13,6 +13,8 @@ from datetime import datetime
 import logging
 from queue import Queue, Empty
 import psutil
+import glob
+import subprocess
 import os
 import random
 
@@ -424,39 +426,77 @@ class FactorClient:
                 self.printer_comm.disconnect()
                 time.sleep(1)
             
-            # 새 연결 시도
-            port_hint = self.printer_port if not self.auto_detect else ""
-            self.printer_comm = PrinterCommunicator(port=port_hint, baudrate=self.printer_baudrate)
+            # 1차: 기본 경로로 재연결 시도 (설정값/자동감지)
             try:
-                setattr(self.printer_comm, 'factor_client', self)
-            except Exception:
-                pass
-            self.printer_comm.connect()
-            
-            if self.printer_comm.connected:
-                self.logger.info("프린터 재연결 성공")
-                # 에러 카운트 리셋
-                self.error_count = 0
-                self.logger.info("프린터 재연결 완료 및 에러 카운트 리셋")
-                # 재연결 시 자동리포트 재설정 및 모니터 재가동
+                port = self.printer_port if not self.auto_detect else ""
+                if not self.printer_comm:
+                    self.printer_comm = PrinterCommunicator(port=port, baudrate=self.printer_baudrate)
+                ok = self.printer_comm.connect(port=port, baudrate=self.printer_baudrate)
+            except Exception as e:
+                self.logger.warning(f"기본 재연결 경고: {e}")
+                ok = False
+
+            # 2차: 실패 시 가능한 포트 후보를 나열하고 순차 연결 시도
+            if not ok:
+                self.logger.warning("기본 재연결 실패 → 포트 스캔 후 재시도")
+                # ls -l /dev/ttyUSB* 로그 덤프(가능 시)
                 try:
-                    if self.printer_comm and self.printer_comm.connected:
-                        self.printer_comm.send_command("M155 S1")
-                        try:
-                            self.printer_comm.send_command("M154 S1")
-                        except Exception:
-                            pass
-                        try:
-                            self.printer_comm.send_command("M27 S5")
-                        except Exception:
-                            pass
+                    proc = subprocess.run(["bash", "-lc", "ls -l /dev/ttyUSB* 2>/dev/null || true"], capture_output=True, text=True, timeout=3)
+                    out = (proc.stdout or "").strip()
+                    if out:
+                        for ln in out.splitlines():
+                            self.logger.info(f"[PORT_SCAN] {ln}")
+                    else:
+                        self.logger.info("[PORT_SCAN] /dev/ttyUSB* 없음")
+                except Exception as e:
+                    self.logger.debug(f"ls -l 실행 불가/무시: {e}")
+
+                # 파이썬 glob으로 후보 수집
+                candidates = []
+                try:
+                    for patt in ("/dev/serial/by-id/*", "/dev/ttyUSB*", "/dev/ttyACM*"):
+                        candidates.extend(sorted(glob.glob(patt)))
+                except Exception:
+                    candidates = []
+
+                tried = set()
+                for dev in candidates:
+                    if dev in tried:
+                        continue
+                    tried.add(dev)
+                    try:
+                        self.logger.info(f"포트 재연결 시도: {dev}@{self.printer_baudrate}")
+                        ok = self.printer_comm.connect(port=dev, baudrate=self.printer_baudrate)
+                        if ok:
+                            self.logger.info(f"프린터 재연결 성공: {dev}")
+                            break
+                    except Exception as e:
+                        self.logger.warning(f"포트 {dev} 연결 실패: {e}")
+
+            if ok and self.printer_comm and self.printer_comm.connected:
+                # 성공 후 자동리포트 재설정 및 모니터 보장
+                try:
+                    self.printer_comm.send_command("M155 S1")
+                except Exception:
+                    pass
+                try:
+                    self.printer_comm.send_command("M154 S1")
+                except Exception:
+                    pass
+                try:
+                    self.printer_comm.send_command("M27 S5")
                 except Exception:
                     pass
                 try:
                     self._start_autoreport_monitor()
                 except Exception:
                     pass
+
+                self.connected = True
+                self.error_count = 0
+                self.logger.info("프린터 재연결 완료 및 에러 카운트 리셋")
             else:
+                self.connected = False
                 self.logger.error("프린터 재연결 실패")
                 
         except Exception as e:

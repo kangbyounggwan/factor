@@ -136,11 +136,6 @@ class ControlModule:
             pc.serial_conn.close()
 
         pc.connected = False
-        # 다음 연결 시 안정 탐색 강제 유도
-        try:
-            pc.port = ""
-        except Exception:
-            pass
         from .printer_comm import PrinterState
         pc._set_state(PrinterState.DISCONNECTED)
         pc.logger.info("프린터 연결 해제 완료")
