@@ -441,13 +441,18 @@ class FactorClient:
                 self.logger.warning("기본 재연결 실패 → 포트 스캔 후 재시도")
                 # ls -l /dev/ttyUSB* 로그 덤프(가능 시)
                 try:
-                    proc = subprocess.run(["bash", "-lc", "ls -l /dev/ttyUSB* 2>/dev/null || true"], capture_output=True, text=True, timeout=3)
-                    out = (proc.stdout or "").strip()
-                    if out:
-                        for ln in out.splitlines():
-                            self.logger.info(f"[PORT_SCAN] {ln}")
+                    cmd = ["bash", "-lc", "ls -l /dev/ttyUSB* 2>/dev/null || true"]
+                    self.logger.info(f"[PORT_SCAN_CMD] {' '.join(cmd)}")
+                    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+                    self.logger.info(f"[PORT_SCAN_RC] {proc.returncode}")
+                    if proc.stdout:
+                        self.logger.info(f"[PORT_SCAN_STDOUT]\n{proc.stdout.rstrip()}\n[PORT_SCAN_END]")
                     else:
-                        self.logger.info("[PORT_SCAN] /dev/ttyUSB* 없음")
+                        self.logger.info("[PORT_SCAN_STDOUT] <empty>")
+                    if proc.stderr:
+                        self.logger.info(f"[PORT_SCAN_STDERR]\n{proc.stderr.rstrip()}\n[PORT_SCAN_END]")
+                    else:
+                        self.logger.info("[PORT_SCAN_STDERR] <empty>")
                 except Exception as e:
                     self.logger.debug(f"ls -l 실행 불가/무시: {e}")
 
