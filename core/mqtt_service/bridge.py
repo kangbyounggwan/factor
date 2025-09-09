@@ -186,47 +186,7 @@ class MQTTService:
         except Exception:
             pass
 
-    def _get_sd_list_via_cache_or_query(self, pc, max_wait_s: float = 4.0, fresh_threshold_s: float = 5.0):
-        files = []
-        ok = False
-        error = ""
-        try:
-            info = getattr(pc, 'sd_card_info', None) or {}
-            last_update = float(info.get('last_update') or 0.0) if isinstance(info, dict) else 0.0
-            now = time.time()
-            # 1) 캐시가 신선하면 즉시 반환
-            if isinstance(info, dict) and (now - last_update) <= fresh_threshold_s:
-                files = list(info.get('files') or [])
-                return files, True, ""
-
-            # 2) 갱신 요청 후 캐시 완료를 대기
-            prev_ts = last_update
-            try:
-                pc.send_command("M20")
-            except Exception:
-                pass
-            deadline = now + max_wait_s
-            while time.time() < deadline:
-                try:
-                    info = getattr(pc, 'sd_card_info', None) or {}
-                    lu = float(info.get('last_update') or 0.0) if isinstance(info, dict) else 0.0
-                    if lu > prev_ts:
-                        files = list(info.get('files') or [])
-                        return files, True, ""
-                except Exception:
-                    pass
-                time.sleep(0.1)
-            # 3) 실패 시 현재 보유 캐시라도 반환
-            if isinstance(info, dict):
-                files = list(info.get('files') or [])
-                ok = len(files) > 0
-                if not ok:
-                    error = "no sd list available"
-            else:
-                error = "no sd list available"
-        except Exception as e:
-            error = str(e)
-        return files, ok, error
+    
 
     # ===== Control handlers =====
     def _publish_ctrl_result(self, action: str, ok: bool, message: str = ""):
