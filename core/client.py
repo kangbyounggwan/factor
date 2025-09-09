@@ -786,10 +786,16 @@ class FactorClient:
                 
                 if not self.connected and self.printer_comm:
                     self.logger.info("프린터 연결 재시도 중...")
-                    if self._connect_to_printer():
-                        self.connected = True
-                        self._start_polling_threads()
-                        self._trigger_callback('on_connect', None)
+                    # 새 재연결 로직 사용: ls -l /dev/ttyUSB* 스캔 후 순차 연결 시도
+                    try:
+                        self._reconnect_printer()
+                    except Exception as e:
+                        self.logger.error(f"재연결 로직 오류: {e}")
+                    if self.connected:
+                        try:
+                            self._trigger_callback('on_connect', None)
+                        except Exception:
+                            pass
                         self.logger.info("프린터 재연결 성공")
                         break
                         
