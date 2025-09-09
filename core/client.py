@@ -570,12 +570,13 @@ class FactorClient:
         self.logger.error(f"================================")
         
         if self.error_count >= max_errors:
-            if self.config.get('system.power_management.auto_reboot_on_error', False):
-                self.logger.critical("최대 오류 횟수 초과 - 시스템 재부팅")
-                os.system('sudo reboot')
-            else:
-                self.logger.critical("최대 오류 횟수 초과 - 프로그램 종료")
-                self.stop()
+            # 재부팅 로직 일시 비활성화
+            # if self.config.get('system.power_management.auto_reboot_on_error', False):
+            #     self.logger.critical("최대 오류 횟수 초과 - 시스템 재부팅")
+            #     os.system('sudo reboot')
+            # else:
+            self.logger.critical("최대 오류 횟수 초과 - 프로그램 종료")
+            self.stop()
     
     # _attempt_heartbeat_recovery 제거됨 (하트비트 복구 미사용)
     
@@ -702,18 +703,8 @@ class FactorClient:
                             self.logger.info("프린터 재연결 완료 및 에러 카운트 리셋")
                             return
 
-                    # 여기까지 오면 실패 → 재부팅
-                    self.logger.error("[RECONNECT] 5회 재연결 실패 → 시스템 재부팅")
-                    try:
-                        if self.sudo_password:
-                            p = subprocess.Popen(["sudo", "-S", "reboot"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-                            stdout, stderr = p.communicate(input=f"{self.sudo_password}\n", timeout=5)
-                            self.logger.info(f"[REBOOT] rc={p.returncode}, stdout={stdout.strip()}, stderr={stderr.strip()}")
-                        else:
-                            proc2 = subprocess.run(["sudo", "reboot"], capture_output=True, text=True, timeout=5)
-                            self.logger.info(f"[REBOOT] rc={proc2.returncode}, stdout={proc2.stdout.strip()}, stderr={proc2.stderr.strip()}")
-                    except Exception as e:
-                        self.logger.error(f"[REBOOT] 재부팅 시도 중 오류: {e}")
+                    # 여기까지 오면 실패 → 재부팅 로직 주석 처리
+                    self.logger.error("[RECONNECT] 5회 재연결 실패 (재부팅 로직 비활성화)")
                 except Exception as e:
                     self.logger.error(f"추가 재시도 루프 오류: {e}")
                 

@@ -266,14 +266,7 @@ class PrinterCommunicator:
                         except Exception:
                             data = ''
                         self.logger.debug(f"[RX_RAW] {repr(data)}")
-                        # INFO 레벨일 때 raw 데이터도 표기
-                        try:
-                            if self.logger.getEffectiveLevel() == logging.INFO and data:
-                                snippet = data.replace('\r', '').replace('\n', '\\n')
-                                if snippet:
-                                    self.logger.info(f"[RX_RAW] {snippet[:300]}")
-                        except Exception:
-                            pass
+                        # [RX_RAW]는 DEBUG 전용으로 유지 (INFO 표기는 제거)
                         buffer += data.replace('\r\n', '\n').replace('\r', '\n')
                     
                     # 2) 버퍼에 라인이 있으면 처리
@@ -340,14 +333,7 @@ class PrinterCommunicator:
                             extra_s = ''
                         if extra_s:
                             self.logger.debug(f"[RX_RAW] {repr(extra_s)}")
-                            # INFO 레벨일 때 raw 데이터도 표기
-                            try:
-                                if self.logger.getEffectiveLevel() == logging.INFO:
-                                    snippet2 = extra_s.replace('\r', '').replace('\n', '\\n')
-                                    if snippet2:
-                                        self.logger.info(f"[RX_RAW] {snippet2[:300]}")
-                            except Exception:
-                                pass
+                            # [RX_RAW]는 DEBUG 전용으로 유지 (INFO 표기는 제거)
                             buffer += extra_s.replace('\r\n', '\n').replace('\r', '\n')
                 
                 time.sleep(0.01)  # CPU 사용률 조절

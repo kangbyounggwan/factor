@@ -303,16 +303,59 @@ class MQTTService:
         self._publish_ctrl_result("resume", ok, err)
 
     def _handle_ctrl_cancel(self, msg):
+        """API 위임: /api/printer/sd/cancel 로 POST 위임"""
         ok = False; err = ""
         try:
-            pc = getattr(self.fc, 'printer_comm', None)
-            if pc and pc.connected and getattr(pc, 'control', None):
-                ok = bool(pc.control.stop_sd_print_with_park())
-            else:
-                err = "printer not connected"
+            try:
+                data = json.loads(msg.payload.decode("utf-8", "ignore") or "{}")
+            except Exception:
+                data = {}
+            # API 호출 위임
+            status, resp = self._post_local_api('/printer/sd/cancel', data)
+            ok = bool(status)
+            if not ok:
+                err = str(resp or '')
         except Exception as e:
             err = str(e)
         self._publish_ctrl_result("cancel", ok, err)
+
+    def _post_local_api(self, path: str, payload: dict, timeout: float = 5.0):
+        """로컬 Flask API로 POST (표준 라이브러리 사용). 성공시 (True, resp_json), 실패시 (False, error_msg)"""
+        try:
+            import urllib.request
+            import urllib.error
+        except Exception:
+            return False, 'urllib not available'
+        try:
+            port =  int(self.cm.get('server.port', 5000)) if hasattr(self, 'cm') else 5000
+        except Exception:
+            port = 5000
+        url = f"http://127.0.0.1:{port}/api{path}"
+        try:
+            body = json.dumps(payload or {}, ensure_ascii=False).encode('utf-8')
+        except Exception:
+            body = b'{}'
+        req = urllib.request.Request(url, data=body, headers={'Content-Type': 'application/json'}, method='POST')
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                code = getattr(resp, 'status', 200)
+                text = resp.read().decode('utf-8', 'ignore')
+                try:
+                    import json as _json
+                    data = _json.loads(text) if text else {}
+                except Exception:
+                    data = {'raw': text}
+                if 200 <= code < 300:
+                    return True, data
+                return False, data
+        except urllib.error.HTTPError as e:
+            try:
+                text = e.read().decode('utf-8', 'ignore')
+            except Exception:
+                text = str(e)
+            return False, text
+        except Exception as e:
+            return False, str(e)
 
     def start(self):
         if self._running:
