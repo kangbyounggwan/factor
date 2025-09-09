@@ -229,6 +229,19 @@ class DataCollectionModule:
                 'last_update': now,
                 'source': 'sd'
             }
+            # ETA 추정기 연동(있다면): printed/total 기반으로 ETA 계산 후 캐시에 반영
+            try:
+                eta = getattr(fc, 'm27_eta', None)
+                if eta and isinstance(printed, int) and isinstance(total, int) and total > 0:
+                    res = eta.update_bytes(printed, total)
+                    try:
+                        fc._sd_progress_cache['eta_sec'] = res.remaining_s
+                        # completion(%) 보정: res.progress는 % 단위. 기존 캐시도 %로 저장 중
+                        fc._sd_progress_cache['completion'] = res.progress
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             try:
                 self.pc._set_state(self.pc.PrinterState.PRINTING if active else self.pc.PrinterState.OPERATIONAL)
             except Exception:

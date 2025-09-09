@@ -22,6 +22,7 @@ from .data_models import *
 from .config_manager import ConfigManager
 from .logger import get_logger, PerformanceLogger
 from .printer_comm import PrinterCommunicator, PrinterState
+from .eta_estimator import EtaEstimator
 
 
 class FactorClient:
@@ -130,6 +131,11 @@ class FactorClient:
         self._temp_poll_thread: Optional[threading.Thread] = None
         self._pos_poll_thread: Optional[threading.Thread] = None
         self._m27_poll_thread: Optional[threading.Thread] = None
+        # M27 ETA 추정기
+        try:
+            self.m27_eta = EtaEstimator(half_life_s=20.0)
+        except Exception:
+            self.m27_eta = None
 
         # sudo 비밀번호(재부팅 시도에 사용; 환경변수로 주입 권장)
         try:
@@ -424,7 +430,7 @@ class FactorClient:
 
     def _fallback_m27_poll_worker(self):
         """M27 진행률 폴링(오토리포트 미사용, 동기 조회)"""
-        interval = 1.0  # 1초 주기 고정
+        interval = 3.0  # 3초 주기
         next_ts = time.monotonic()
         while self.running and self.connected:
             try:
@@ -434,6 +440,27 @@ class FactorClient:
                         if r:
                             try:
                                 self.logger.info(f"[M27_POLL] {r.strip()}")
+                            except Exception:
+                                pass
+                            # ETA 추정기 업데이트 및 진행률 캐시에 반영
+                            try:
+                                eta = getattr(self, 'm27_eta', None)
+                                if eta:
+                                    from .eta_estimator import parse_m27
+                                    parsed = parse_m27(r)
+                                    if parsed:
+                                        res = eta.update_bytes(*parsed)
+                                        cache = getattr(self, '_sd_progress_cache', {}) or {}
+                                        cache.update({
+                                            'active': True,
+                                            'completion': res.progress,
+                                            'printed_bytes': parsed[0],
+                                            'total_bytes': parsed[1],
+                                            'eta_sec': res.remaining_s,
+                                            'last_update': time.time(),
+                                            'source': 'sd'
+                                        })
+                                        setattr(self, '_sd_progress_cache', cache)
                             except Exception:
                                 pass
                     except Exception:

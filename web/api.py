@@ -296,21 +296,6 @@ def reconnect_printer():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-# @api_bp.route('/printer/cancel', methods=['POST'])
-# def cancel_print():
-#     """인쇄 취소: 큐 비우기 → 파킹 이동 → 쿨다운"""
-#     try:
-#         fc = current_app.factor_client
-#         if not fc or not hasattr(fc, 'printer_comm'):
-#             return jsonify({'success': False, 'error': 'Factor client not available'}), 503
-#         pc = fc.printer_comm
-#         if hasattr(pc, 'control') and pc.control:
-#             ok = pc.control.cancel_print()
-#             return jsonify({'success': bool(ok)}) if ok else (jsonify({'success': False}), 500)
-#         return jsonify({'success': False, 'error': 'control not available'}), 500
-#     except Exception as e:
-#         logger.error(f"취소 처리 오류: {e}")
-#         return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @api_bp.route('/config', methods=['GET'])
