@@ -144,6 +144,10 @@ class MQTTService:
                 pass
         # SD 카드 파일 리스트 요청 (payload type 무관, 토픽으로만 구분)
         elif msg.topic == self.sd_list_topic:
+            try:
+                self.logger.info(f"[MQTT_RX] topic={msg.topic} payload={payload}")
+            except Exception:
+                pass
             self._handle_sd_list_request()
         # control: home/pause/resume/cancel
         elif msg.topic == self.ctrl_home_topic:
@@ -164,13 +168,35 @@ class MQTTService:
         error = ""
         try:
             status, resp = self._get_local_api('/printer/sd/list')
+                    # 1) resp를 dict로 정규화
+            raw_resp = resp
+            try:
+                if isinstance(resp, (bytes, str)):
+                    resp = json.loads(resp)
+            except Exception as e:
+                # JSON이 아니면 그대로 에러로 남김
+                error = f"JSON parse error: {e}; raw={raw_resp!r}"
+
+            # 2) dict일 때만 파싱 진행
             if status and isinstance(resp, dict):
-                ok = bool(resp.get('success', False))
-                files = list(resp.get('files') or []) if ok else []
-                if not ok:
-                    error = str(resp.get('error') or '')
+                # success/ok 둘 다 지원
+                ok = bool(resp.get('success', resp.get('ok', False)))
+
+                # files 위치 유연하게 처리 (top-level or data.files)
+                files_val = resp.get('files')
+                if files_val is None:
+                    files_val = (resp.get('data') or {}).get('files')
+
+                if ok and files_val:
+                    # list(...)로 리스트 보장
+                    files = list(files_val)
+                else:
+                    if not ok and not error:
+                        error = str(resp.get('error') or '')
             else:
-                error = str(resp or 'api error')
+                if not error:
+                    error = str(resp or 'api error')
+
         except Exception as e:
             error = str(e)
 
@@ -182,11 +208,16 @@ class MQTTService:
             "timestamp": int(time.time() * 1000),
         }
         try:
-            self.client.publish(self.sd_list_result_topic, json.dumps(payload, ensure_ascii=False), qos=1, retain=False)
+            self.client.publish(
+                self.sd_list_result_topic,
+                json.dumps(payload, ensure_ascii=False),
+                qos=1,
+                retain=False
+            )
         except Exception:
             pass
+ 
 
-    
 
     # ===== Control handlers =====
     def _publish_ctrl_result(self, action: str, ok: bool, message: str = ""):
