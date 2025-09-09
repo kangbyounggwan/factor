@@ -16,6 +16,7 @@ import psutil
 import glob
 import subprocess
 import os
+import stat
 import random
 
 from .data_models import *
@@ -528,6 +529,11 @@ class FactorClient:
                 if dev in tried:
                     continue
                 tried.add(dev)
+                # 문자 디바이스/권한/udev 상태 보정
+                try:
+                    self._reset_and_fix_tty(dev)
+                except Exception:
+                    pass
                 try:
                     self.logger.info(f"포트 재연결 시도: {dev}@{self.printer_baudrate}")
                     ok = self.printer_comm.connect(port=dev, baudrate=self.printer_baudrate)
@@ -535,7 +541,21 @@ class FactorClient:
                         self.logger.info(f"프린터 재연결 성공: {dev}")
                         break
                 except Exception as e:
-                    self.logger.warning(f"포트 {dev} 연결 실패: {e}")
+                    if "Permission denied" in str(e):
+                        self.logger.warning(f"[PERM] {dev} Permission denied → udev/dialout 보정 후 재시도")
+                        try:
+                            self._reset_and_fix_tty(dev)
+                        except Exception:
+                            pass
+                        try:
+                            ok = self.printer_comm.connect(port=dev, baudrate=self.printer_baudrate)
+                            if ok:
+                                self.logger.info(f"프린터 재연결 성공: {dev}")
+                                break
+                        except Exception as e2:
+                            self.logger.warning(f"포트 {dev} 재시도 실패: {e2}")
+                    else:
+                        self.logger.warning(f"포트 {dev} 연결 실패: {e}")
 
             if ok and self.printer_comm and self.printer_comm.connected:
                 # 성공 후 자동리포트 재설정 및 모니터 보장
@@ -565,6 +585,49 @@ class FactorClient:
                 
         except Exception as e:
             self.logger.error(f"프린터 재연결 중 오류: {e}")
+
+    def _reset_and_fix_tty(self, dev_path: str) -> None:
+        """ttyUSB 노드가 문자 디바이스인지 확인하고, 아니면 udev로 재생성. dialout/권한 보정 시도.
+        sudo NOPASSWD가 없으면 자동으로 실패하고 로그만 남깁니다.
+        """
+        # 상태 로그(before)
+        try:
+            st = os.stat(dev_path)
+            self.logger.info(f"[TTYCHK] {dev_path} mode={oct(stat.S_IMODE(st.st_mode))} uid={st.st_uid} gid={st.st_gid}")
+        except Exception:
+            pass
+
+        # 문자 디바이스가 아니면 제거 후 udev 트리거
+        try:
+            st = os.stat(dev_path)
+            if not stat.S_ISCHR(st.st_mode):
+                self.logger.warning(f"[TTYFIX] {dev_path} not char device → rm & udev trigger")
+                try:
+                    subprocess.run(["sudo", "-n", "rm", "-f", dev_path], timeout=2, check=False)
+                except Exception:
+                    pass
+                try:
+                    subprocess.run(["sudo", "-n", "udevadm", "control", "--reload-rules"], timeout=3, check=False)
+                    subprocess.run(["sudo", "-n", "udevadm", "trigger", "--subsystem-match=tty"], timeout=3, check=False)
+                    subprocess.run(["sudo", "-n", "udevadm", "settle", "-t", "5"], timeout=6, check=False)
+                except Exception:
+                    pass
+        except Exception as e:
+            self.logger.debug(f"[TTYFIX] stat/udev ignore: {e}")
+
+        # dialout 그룹/모드 보정(가능 시)
+        try:
+            subprocess.run(["sudo", "-n", "chgrp", "dialout", dev_path], timeout=3, check=False)
+            subprocess.run(["sudo", "-n", "chmod", "660", dev_path], timeout=3, check=False)
+        except Exception as e:
+            self.logger.debug(f"[TTYFIX] chgrp/chmod ignore: {e}")
+
+        # 상태 로그(after)
+        try:
+            st2 = os.stat(dev_path)
+            self.logger.info(f"[TTYCHK_AFTER] {dev_path} mode={oct(stat.S_IMODE(st2.st_mode))} uid={st2.st_uid} gid={st2.st_gid}")
+        except Exception:
+            pass
     
     
     def _system_monitor_worker(self):
