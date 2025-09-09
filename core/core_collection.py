@@ -355,6 +355,9 @@ class DataCollectionModule:
         """
         pc = self.pc
         try:
+            # 동기 전송 중이면 즉시 캐시 반환하여 잠금 경쟁 회피
+            if getattr(pc, 'sync_mode', False):
+                return getattr(pc, '_last_temp_info', TemperatureInfo(tool={}))
             # 오토리포트 활성 시(최근 수신이 있으면) 캐시 사용하여 M105 회피
             try:
                 if getattr(pc, '_last_temp_info', None) is not None:
@@ -386,6 +389,9 @@ class DataCollectionModule:
         """
         pc = self.pc
         try:
+            # 동기 전송 중이면 즉시 캐시 반환하여 잠금 경쟁 회피
+            if getattr(pc, 'sync_mode', False):
+                return pc.current_position
             # 오토리포트 활성 시(최근 수신이 있으면) 캐시 사용하여 M114 회피
             try:
                 last_ts = float(getattr(pc, '_last_pos_time', 0.0) or 0.0)

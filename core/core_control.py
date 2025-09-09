@@ -231,61 +231,51 @@ class ControlModule:
         if not pc.connected or not (pc.serial_conn and pc.serial_conn.is_open):
             pc.logger.warning("프린터가 연결되지 않음")
             return None
-        with pc.serial_lock:
-            pc.sync_mode = True
-            try:
-                pc._last_temp_line = None; pc._last_pos_line = None; pc.last_response = None
-                pc.logger.debug(f"[SYNC_TX] {command!r}")
+        # 1) TX는 잠깐 락으로 보호하고, RX는 읽기 워커에 맡긴다
+        try:
+            pc.logger.debug(f"[SYNC_TX] {command!r}")
+            with pc.serial_lock:
                 pc.serial_conn.write(f"{command}\n".encode("utf-8"))
                 pc.serial_conn.flush()
-                deadline = time.monotonic() + timeout
-                while time.monotonic() < deadline:
-                    line_bytes = pc.serial_conn.readline()
-                    if line_bytes:
-                        line = line_bytes.decode("utf-8", errors="ignore").strip()
-                        if line:
-                            pc.logger.debug(f"[SYNC_RX] {line}")
-                            try:
-                                pc._process_response(line)
-                            except Exception:
-                                pass
-                            if command == "M105" and ("T:" in line or line.lower().startswith("ok")):
-                                return line
-                            if command == "M114" and ("X:" in line or line.lower().startswith("ok")):
-                                return line
-                            pc.last_response = line
-                    else:
-                        if pc.serial_conn.in_waiting:
-                            extra = pc.serial_conn.read(pc.serial_conn.in_waiting)
-                            try:
-                                extra_s = extra.decode("utf-8", errors="ignore")
-                            except Exception:
-                                extra_s = ""
-                            for part in extra_s.replace("\r\n","\n").replace("\r","\n").split("\n"):
-                                p = part.strip()
-                                if p:
-                                    pc.logger.debug(f"[SYNC_RX] {p}")
-                                    try:
-                                        pc._process_response(p)
-                                    except Exception:
-                                        pass
-                                    if command == "M105" and ("T:" in p or p.lower().startswith("ok")):
-                                        return p
-                                    if command == "M114" and ("X:" in p or p.lower().startswith("ok")):
-                                        return p
-                                    pc.last_response = p
-                        # monotonic 기반 슬립
-                        remaining = deadline - time.monotonic()
-                        time.sleep(0.05 if remaining > 0.05 else max(0.0, remaining))
-                if pc.last_response:
-                    return pc.last_response
-                pc.logger.warning(f"명령 '{command}' 응답 타임아웃 ({timeout}초)")
-                return None
-            except Exception as e:
-                pc.logger.error(f"동기 전송/수신 실패: {e}")
-                return None
-            finally:
-                pc.sync_mode = False
+        except Exception as e:
+            pc.logger.error(f"TX 실패: {e}")
+            return None
+
+        # 2) 읽기 워커가 적재하는 공유 상태 변화 감시로 응답 대기
+        deadline = time.monotonic() + timeout
+        last_temp_line_before = getattr(pc, '_last_temp_line', None)
+        last_pos_line_before = getattr(pc, '_last_pos_line', None)
+        last_resp_before = getattr(pc, 'last_response', None)
+
+        while time.monotonic() < deadline:
+            try:
+                lr = getattr(pc, 'last_response', None)
+                # M105: 온도 라인 갱신 또는 ok 수신 시 완료
+                if command.upper().startswith('M105'):
+                    if getattr(pc, '_last_temp_line', None) != last_temp_line_before:
+                        return getattr(pc, '_last_temp_line', lr)
+                    if isinstance(lr, str) and (('T:' in lr) or lr.lower().startswith('ok')) and lr != last_resp_before:
+                        return lr
+                # M114: 위치 라인 갱신 또는 ok 수신 시 완료
+                elif command.upper().startswith('M114'):
+                    if getattr(pc, '_last_pos_line', None) != last_pos_line_before:
+                        return getattr(pc, '_last_pos_line', lr)
+                    if isinstance(lr, str) and (('X:' in lr) or lr.lower().startswith('ok')) and lr != last_resp_before:
+                        return lr
+                else:
+                    # 일반 명령: 새로운 응답 한 줄이라도 들어오면 반환
+                    if lr is not None and lr != last_resp_before:
+                        return lr
+            except Exception:
+                pass
+            remaining = deadline - time.monotonic()
+            time.sleep(0.02 if remaining > 0.02 else max(0.0, remaining))
+
+        # 타임아웃: 최신 응답이 있으면 그것이라도 반환
+        if getattr(pc, 'last_response', None) is not None:
+            return pc.last_response
+        pc.logger.warning(f"명령 '{command}' 응답 타임아웃 ({timeout}초)")
+        return None
 
     def send_gcode(self, command: str, wait: bool = False, timeout: float = 8.0) -> bool:
         """
@@ -387,6 +377,58 @@ class ControlModule:
                 t.start()
             except Exception:
                 pass
+            return True
+        except Exception:
+            return False
+
+    def stop_sd_print_with_park(self) -> bool:
+        """SD 카드 출력 중지(+파킹/쿨다운 시퀀스).
+
+        sh equivalent:
+          { printf "M25\n"; sleep 0.2; printf "G91\nG1 Z10 F600\nG90\nG1 X0 Y200 F6000\nM104 S0\nM140 S0\nM106 S0\n"; sleep 0.5; } | socat - /dev/ttyUSB0,raw,echo=0,b115200,crnl
+        """
+        pc = self.pc
+        try:
+            # 1) SD 출력 일시정지
+            try:
+                self.send_command_and_wait('M25', timeout=5.0)
+            except Exception:
+                pass
+
+            # 2) 짧은 지연
+            time.sleep(0.2)
+
+            # 3) SD 인쇄 완전 중단(M524) 및 상태 확인(M27)
+            try:
+                self.send_command_and_wait('M524', timeout=5.0)
+            except Exception:
+                pass
+            time.sleep(0.3)
+            try:
+                self.send_command('M27')  # 상태 확인
+            except Exception:
+                pass
+            time.sleep(0.2)
+
+            # 4) 파킹 및 쿨다운 시퀀스
+            seq = [
+                'G91',            # 상대좌표
+                'G1 Z10 F600',    # 노즐 올리기
+                'G90',            # 절대좌표 복귀
+                'G1 X0 Y200 F6000',
+                'M104 S0',        # 노즐 끄기
+                'M140 S0',        # 베드 끄기
+                'M106 S0',        # 팬 끄기
+            ]
+            for cmd in seq:
+                try:
+                    self.send_gcode(cmd, wait=False)
+                except Exception:
+                    pass
+
+            # 5) 후행 지연
+            time.sleep(0.5)
+
             return True
         except Exception:
             return False

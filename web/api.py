@@ -637,7 +637,7 @@ def sd_print_file():
 @api_bp.route('/printer/sd/cancel', methods=['POST'])
 def sd_cancel_print():
     """SD 인쇄 일시중지/취소.
-    순서: M25 → (선택) M400 → M524 → M27 S0 → (선택) 파킹/쿨다운
+    순서: M25 → (선택) M400 → M524 → (선택) 파킹/쿨다운
     요청 JSON 예:
       {
         "mode": "pause" | "cancel",   # 기본 cancel
@@ -682,11 +682,7 @@ def sd_cancel_print():
             except Exception:
                 pass
 
-        # 4) 자동 리포트 끄기(켜뒀다면): M27 S0
-        try:
-            pc.send_command('M27 S0')
-        except Exception:
-            pass
+        # 4) 자동 리포트는 유지 (항상 온도/위치/출력 활성정보 켜둠)
 
         # 5) 안전 파킹/쿨다운(선택)
         if do_park:

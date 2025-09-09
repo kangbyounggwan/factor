@@ -92,7 +92,7 @@ class PrintProgress:
     def to_dict(self) -> Dict[str, Any]:
         return {
             'active': self.active,
-            'completion': self.completion,
+            'completion': round(self.completion, 4) if self.completion is not None else None,
             'file_position': self.file_position,
             'file_size': self.file_size,
             'print_time': self.print_time,
