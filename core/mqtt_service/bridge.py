@@ -289,10 +289,26 @@ class MQTTService:
                     fd, tmp = tempfile.mkstemp(prefix="sd_up_", suffix=".bin")
                     import os as _os
                     f = _os.fdopen(fd, "wb")
-                    self._upload_sessions[upid] = {'name': name, 'tmp': tmp, 'f': f, 'total': total, 'received': 0}
+                    self._upload_sessions[upid] = {
+                        'name': name,
+                        'tmp': tmp,
+                        'f': f,
+                        'total': total,
+                        'received': 0,
+                        'next_index': 0,
+                        'start_ts': time.time(),
+                    }
                     s = self._upload_sessions[upid]
                 except Exception as e:
                     self._publish_ctrl_result("sd_upload", False, f"init failed: {e}"); return
+            # 인덱스 검증
+            try:
+                idx = int(data.get('index'))
+            except Exception:
+                self._publish_ctrl_result("sd_upload", False, "missing/invalid index"); return
+            expected = int(s.get('next_index') or 0)
+            if idx != expected:
+                self._publish_ctrl_result("sd_upload", False, f"unexpected index {idx} (expected {expected})"); return
             b64 = data.get('data_b64')
             size = int(data.get('size') or 0)
             if not b64 or size <= 0:
@@ -302,8 +318,24 @@ class MQTTService:
                 chunk = base64.b64decode(b64, validate=True)
             except Exception:
                 chunk = base64.b64decode(b64)
+            # 길이 검증
+            if len(chunk) != size:
+                self._publish_ctrl_result("sd_upload", False, f"size mismatch decoded={len(chunk)} meta={size}")
+                return
             s['f'].write(chunk)
             s['received'] += len(chunk)
+            s['next_index'] = expected + 1
+            # 진행률 통지
+            try:
+                total = float(s.get('total') or 0) or 1.0
+                pct = (float(s['received']) / total) * 100.0
+                name = s.get('name') or ''
+                self._publish_ctrl_result(
+                    "sd_upload_progress", True,
+                    f"upload_id={upid} name={name} received={s['received']}/{int(total)} ({pct:.1f}%)"
+                )
+            except Exception:
+                pass
             ok = True
         except Exception as e:
             err = str(e)
@@ -320,6 +352,14 @@ class MQTTService:
                 s['f'].flush(); s['f'].close()
             except Exception:
                 pass
+            # 누락 검증
+            try:
+                total = int(s.get('total') or 0)
+                if int(s.get('received') or 0) != total:
+                    self._publish_ctrl_result("sd_upload", False, f"incomplete upload received={s.get('received')}/{total}")
+                    return
+            except Exception:
+                pass
             # 로컬 API 멀티파트 업로드 위임
             try:
                 with open(s['tmp'], 'rb') as rf:
@@ -332,6 +372,14 @@ class MQTTService:
             if not ok2:
                 err = str(resp or '')
             ok = bool(ok2)
+            # 최종 진행률 통지(100%)
+            try:
+                self._publish_ctrl_result(
+                    "sd_upload_progress", True,
+                    f"upload_id={upid} name={s.get('name','')} received={s.get('received')}/{s.get('total')} (100.0%)"
+                )
+            except Exception:
+                pass
             # 정리
             try:
                 import os
