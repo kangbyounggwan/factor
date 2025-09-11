@@ -133,6 +133,9 @@ class MQTTService:
         # 대시보드: 축 이동
         elif mtype == 'move' and msg.topic == self.dashboard_topic:
             self._handle_ctrl_move(data)
+        # 대시보드: 온도 설정
+        elif mtype == 'set_temperature' and msg.topic == self.dashboard_topic:
+            self._handle_ctrl_set_temperature(data)
         # 관리자 일반 명령 (reboot 등)
         elif mtype == 'command' and msg.topic == self.admin_cmd_topic:
             handle_command(self.client, self.cm, self.fc, data)
@@ -255,6 +258,59 @@ class MQTTService:
             self.client.publish(self.ctrl_result_topic, json.dumps(payload, ensure_ascii=False), qos=1, retain=False)
         except Exception:
             pass
+
+    def _handle_ctrl_set_temperature(self, data: dict):
+        ok = False; err = ""
+        try:
+            pc = getattr(self.fc, 'printer_comm', None)
+            if not (pc and pc.connected):
+                self._publish_ctrl_result("set_temperature", False, "printer not connected")
+                return
+
+            # 입력 파싱
+            try:
+                tool = int(data.get("tool"))
+            except Exception:
+                self._publish_ctrl_result("set_temperature", False, "invalid tool")
+                return
+
+            try:
+                target = float(data.get("temperature"))
+            except Exception:
+                self._publish_ctrl_result("set_temperature", False, "invalid temperature")
+                return
+
+            wait_flag = bool(data.get("wait", False))
+
+            # 간단 범위 검증(선택)
+            if tool == -1:
+                if target < 0 or target > 120:
+                    self._publish_ctrl_result("set_temperature", False, "bed temperature out of range")
+                    return
+            else:
+                if target < 0 or target > 300:
+                    self._publish_ctrl_result("set_temperature", False, "temperature out of range")
+                    return
+
+            # 전송
+            if tool == -1:
+                # Bed
+                if wait_flag:
+                    pc.send_gcode(f"M190 S{target}", wait=True, timeout=120.0)
+                else:
+                    pc.send_gcode(f"M140 S{target}", wait=False)
+            else:
+                # Tool N
+                if wait_flag:
+                    pc.send_gcode(f"M109 T{tool} S{target}", wait=True, timeout=120.0)
+                else:
+                    pc.send_gcode(f"M104 T{tool} S{target}", wait=False)
+
+            ok = True
+        except Exception as e:
+            err = str(e)
+
+        self._publish_ctrl_result("set_temperature", ok, err)
 
     def _handle_ctrl_move(self, data: dict):
         ok = False; err = ""

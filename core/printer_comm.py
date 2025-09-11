@@ -439,9 +439,9 @@ class PrinterCommunicator:
     def set_temperature(self, tool: int = 0, temp: float = 0):
         """온도 설정"""
         if tool == -1:  # 베드
-            self.send_command(f"M140 S{temp}")
+            self.send_gcode(f"M140 S{temp}")
         else:  # 툴
-            self.send_command(f"M104 T{tool} S{temp}")
+            self.send_gcode(f"M104 T{tool} S{temp}")
     
     def move_axis(self, x: Optional[float] = None, y: Optional[float] = None, 
                   z: Optional[float] = None, e: Optional[float] = None, 
