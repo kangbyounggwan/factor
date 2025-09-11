@@ -935,22 +935,42 @@ def upload_sd_file():
 
                 # Handshake: M28 진입 확인 (에코/안내 라인 대기)
                 try:
-                    end = time.time() + 5.0
-                    engaged = False
-                    while time.time() < end:
-                        line = pc.serial_conn.readline()
-                        if not line:
-                            time.sleep(0.01); continue
-                        s = line.decode('utf-8', errors='ignore').strip().lower()
-                        # 마를린: "Writing to file:"/"File opened"/"Now fresh file:" 만 진입 확정(ok만으로는 불충분)
-                        if ('writing to file' in s) or ('file opened' in s) or ('now fresh file' in s):
-                            engaged = True
-                        break
+                    def _check_engaged(timeout: float = 5.0) -> bool:
+                        end = time.time() + timeout
+                        while time.time() < end:
+                            line = pc.serial_conn.readline()
+                            if not line:
+                                time.sleep(0.01); continue
+                            s = line.decode('utf-8', errors='ignore').strip().lower()
+                            # 다양한 펌웨어 메시지 수용
+                            if (
+                                ('writing to file' in s) or
+                                ('file opened' in s) or
+                                ('now fresh file' in s) or
+                                ('begin file write' in s) or
+                                ('opening file' in s)
+                            ):
+                                return True
+                            # 명시 실패 메시지 조기 중단
+                            if ('open failed' in s) or ('no sd' in s):
+                                return False
+                            break
+                        return False
+
+                    engaged = _check_engaged(timeout=5.0)
                     if not engaged:
-                        # 진입 실패로 간주(M21을 사용하지 않고 안전하게 종료)
-                        pc.serial_conn.write(b"M29\n"); pc.serial_conn.flush()
-                        pc.sync_mode = False
-                        return jsonify({'success': False, 'error': 'failed to enter SD write mode (M28). Ensure SD is initialized on the printer.'}), 500
+                        # Fallback: 재마운트 후 재시도 (실패해도 여기서 중단하지 않음)
+                        try:
+                            pc.serial_conn.write(b"M29\n"); pc.serial_conn.flush(); time.sleep(0.05)
+                        except Exception:
+                            pass
+                        try:
+                            pc.serial_conn.write(b"M22\n"); pc.serial_conn.flush(); wait_ok(2.0)
+                            pc.serial_conn.write(b"M21\n"); pc.serial_conn.flush(); wait_ok(2.0)
+                            pc.serial_conn.write((f"M28 {remote_name}\n").encode('utf-8')); pc.serial_conn.flush(); time.sleep(0.05)
+                            _ = _check_engaged(timeout=3.0)
+                        except Exception:
+                            pass
                 except Exception:
                     pass
 
