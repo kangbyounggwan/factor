@@ -287,15 +287,6 @@ class MQTTService:
                 self._publish_ctrl_result("move", False, "no axes provided")
                 return
 
-            # 이동 모드 설정
-            try:
-                if mode.startswith("rel"):
-                    pc.send_command("G91")  # 상대 좌표
-                else:
-                    pc.send_command("G90")  # 절대 좌표
-            except Exception:
-                pass
-
             # 이동 실행: FactorClient 래퍼를 사용해 feedrate 기본값(1000) 적용
             try:
                 fc = getattr(self, 'fc', None)
@@ -303,6 +294,7 @@ class MQTTService:
                     fc.move_axis(x, y, z, e, feedrate)
                 else:
                     pc.move_axis(x, y, z, e, feedrate)
+                    
             except Exception as e:
                 err = str(e)
                 self._publish_ctrl_result("move", False, err)
