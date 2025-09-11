@@ -80,6 +80,8 @@ class MQTTService:
             self.keepalive = int(self.cm.get('mqtt.keepalive', 120))
         except Exception:
             self.keepalive = 120
+        # SD 업로드 세션 관리 맵
+        self._upload_sessions = {}
 
     def _on_connect(self, client, userdata, flags, rc):
         # collection
@@ -136,6 +138,11 @@ class MQTTService:
         # 대시보드: 온도 설정
         elif mtype == 'set_temperature' and msg.topic == self.dashboard_topic:
             self._handle_ctrl_set_temperature(data)
+        # SD 업로드(청크): chunk/commit
+        elif mtype == 'sd_upload_chunk' and msg.topic == self.dashboard_topic:
+            self._handle_sd_upload_chunk(data)
+        elif mtype == 'sd_upload_commit' and msg.topic == self.dashboard_topic:
+            self._handle_sd_upload_commit(data)
         # 관리자 일반 명령 (reboot 등)
         elif mtype == 'command' and msg.topic == self.admin_cmd_topic:
             handle_command(self.client, self.cm, self.fc, data)
@@ -258,6 +265,83 @@ class MQTTService:
             self.client.publish(self.ctrl_result_topic, json.dumps(payload, ensure_ascii=False), qos=1, retain=False)
         except Exception:
             pass
+
+    # ===== SD 업로드(청크) 유틸 =====
+
+    # _handle_sd_upload_init 제거됨 (첫 청크 자동 초기화)
+
+    def _handle_sd_upload_chunk(self, data: dict):
+        ok = False; err = ""
+        try:
+            upid = str(data.get('upload_id') or '').strip()
+            s = self._upload_sessions.get(upid)
+            if not s:
+                # 첫 청크에서 자동 초기화 지원: name, total_size 필수
+                name = str(data.get('name') or '').strip()
+                try:
+                    total = int(data.get('total_size') or 0)
+                except Exception:
+                    total = 0
+                if not name or total <= 0:
+                    self._publish_ctrl_result("sd_upload", False, "need name and total_size on first chunk"); return
+                try:
+                    import tempfile
+                    fd, tmp = tempfile.mkstemp(prefix="sd_up_", suffix=".bin")
+                    import os as _os
+                    f = _os.fdopen(fd, "wb")
+                    self._upload_sessions[upid] = {'name': name, 'tmp': tmp, 'f': f, 'total': total, 'received': 0}
+                    s = self._upload_sessions[upid]
+                except Exception as e:
+                    self._publish_ctrl_result("sd_upload", False, f"init failed: {e}"); return
+            b64 = data.get('data_b64')
+            size = int(data.get('size') or 0)
+            if not b64 or size <= 0:
+                self._publish_ctrl_result("sd_upload", False, "invalid chunk"); return
+            import base64
+            try:
+                chunk = base64.b64decode(b64, validate=True)
+            except Exception:
+                chunk = base64.b64decode(b64)
+            s['f'].write(chunk)
+            s['received'] += len(chunk)
+            ok = True
+        except Exception as e:
+            err = str(e)
+        self._publish_ctrl_result("sd_upload", ok, err)
+
+    def _handle_sd_upload_commit(self, data: dict):
+        ok = False; err = ""
+        try:
+            upid = str(data.get('upload_id') or '').strip()
+            s = self._upload_sessions.get(upid)
+            if not s:
+                self._publish_ctrl_result("sd_upload", False, "unknown upload_id"); return
+            try:
+                s['f'].flush(); s['f'].close()
+            except Exception:
+                pass
+            # 로컬 API 멀티파트 업로드 위임
+            try:
+                with open(s['tmp'], 'rb') as rf:
+                    content = rf.read()
+            except Exception as e:
+                self._publish_ctrl_result("sd_upload", False, f"temp read error: {e}"); return
+            fields = {'name': s['name']}
+            files = {'file': {'filename': s['name'], 'content': content, 'content_type': 'application/octet-stream'}}
+            ok2, resp = self._post_local_api('/printer/sd/upload', fields, files=files, as_multipart=True, timeout=300.0)
+            if not ok2:
+                err = str(resp or '')
+            ok = bool(ok2)
+            # 정리
+            try:
+                import os
+                os.remove(s['tmp'])
+            except Exception:
+                pass
+            self._upload_sessions.pop(upid, None)
+        except Exception as e:
+            err = str(e)
+        self._publish_ctrl_result("sd_upload", ok, err)
 
     def _handle_ctrl_set_temperature(self, data: dict):
         ok = False; err = ""
@@ -450,11 +534,16 @@ class MQTTService:
             err = str(e)
         self._publish_ctrl_result("cancel", ok, err)
 
-    def _post_local_api(self, path: str, payload: dict, timeout: float = 5.0):
-        """로컬 Flask API로 POST (표준 라이브러리 사용). 성공시 (True, resp_json), 실패시 (False, error_msg)"""
+    def _post_local_api(self, path: str, payload: dict, timeout: float = 5.0, files: dict = None, as_multipart: bool = False):
+        """로컬 Flask API로 POST.
+        - JSON: payload(dict) → application/json
+        - 멀티파트(as_multipart=True): fields=payload, files(dict: {'field': {'filename','content','content_type'}})
+        성공시 (True, resp_json), 실패시 (False, error_msg)
+        """
         try:
             import urllib.request
             import urllib.error
+            import uuid as _uuid
         except Exception:
             return False, 'urllib not available'
         try:
@@ -462,11 +551,42 @@ class MQTTService:
         except Exception:
             port = 5000
         url = f"http://127.0.0.1:{port}/api{path}"
-        try:
-            body = json.dumps(payload or {}, ensure_ascii=False).encode('utf-8')
-        except Exception:
-            body = b'{}'
-        req = urllib.request.Request(url, data=body, headers={'Content-Type': 'application/json'}, method='POST')
+        headers = {}
+        body = b''
+        if as_multipart:
+            boundary = f"----Boundary{_uuid.uuid4().hex}"
+            headers['Content-Type'] = f'multipart/form-data; boundary={boundary}'
+            crlf = b"\r\n"
+            def _part_header(name, filename=None, content_type=None):
+                disp = f'form-data; name="{name}"'
+                if filename:
+                    disp += f'; filename="{filename}"'
+                hdr = f"--{boundary}\r\nContent-Disposition: {disp}\r\n"
+                if content_type:
+                    hdr += f"Content-Type: {content_type}\r\n"
+                hdr += "\r\n"
+                return hdr.encode('utf-8')
+            buf = bytearray()
+            for k, v in (payload or {}).items():
+                buf += _part_header(k)
+                buf += (str(v).encode('utf-8'))
+                buf += crlf
+            for field_name, spec in (files or {}).items():
+                filename = (spec.get('filename') or 'upload.bin')
+                content = (spec.get('content') or b'')
+                content_type = (spec.get('content_type') or 'application/octet-stream')
+                buf += _part_header(field_name, filename=filename, content_type=content_type)
+                buf += content
+                buf += crlf
+            buf += f"--{boundary}--\r\n".encode('utf-8')
+            body = bytes(buf)
+        else:
+            headers['Content-Type'] = 'application/json'
+            try:
+                body = json.dumps(payload or {}, ensure_ascii=False).encode('utf-8')
+            except Exception:
+                body = b'{}'
+        req = urllib.request.Request(url, data=body, headers=headers, method='POST')
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 code = getattr(resp, 'status', 200)
