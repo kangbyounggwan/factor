@@ -466,7 +466,7 @@ class PrinterCommunicator:
         except Exception:
             pass
 
-        self.send_command(command)
+        self.send_gcode(command)
     
     def emergency_stop(self):
         """비상 정지"""
