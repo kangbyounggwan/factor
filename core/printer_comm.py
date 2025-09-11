@@ -460,6 +460,12 @@ class PrinterCommunicator:
         if feedrate is not None:
             command += f" F{feedrate}"
         
+        # 최종 G-code 로그 출력
+        try:
+            self.logger.info(f"[MOVE_AXIS] {command}")
+        except Exception:
+            pass
+
         self.send_command(command)
     
     def emergency_stop(self):
