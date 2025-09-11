@@ -290,9 +290,9 @@ class MQTTService:
             # 이동 모드 설정
             try:
                 if mode.startswith("rel"):
-                    pc.send_command("G91")  # 상대 좌표
+                    pc.send_gcode("G91")  # 상대 좌표
                 else:
-                    pc.send_command("G90")  # 절대 좌표
+                    pc.send_gcode("G90")  # 절대 좌표
             except Exception:
                 pass
 
@@ -311,7 +311,7 @@ class MQTTService:
             # 상대 모드였으면 절대 모드로 복귀
             if mode.startswith("rel"):
                 try:
-                    pc.send_command("G90")
+                    pc.send_gcode("G90")
                 except Exception:
                     pass
 
