@@ -130,6 +130,9 @@ class MQTTService:
             except Exception:
                 pass
             self._stop_status_stream()
+        # 대시보드: 축 이동
+        elif mtype == 'move' and msg.topic == self.dashboard_topic:
+            self._handle_ctrl_move(data)
         # 관리자 일반 명령 (reboot 등)
         elif mtype == 'command' and msg.topic == self.admin_cmd_topic:
             handle_command(self.client, self.cm, self.fc, data)
@@ -252,6 +255,71 @@ class MQTTService:
             self.client.publish(self.ctrl_result_topic, json.dumps(payload, ensure_ascii=False), qos=1, retain=False)
         except Exception:
             pass
+
+    def _handle_ctrl_move(self, data: dict):
+        ok = False; err = ""
+        try:
+            pc = getattr(self.fc, 'printer_comm', None)
+            if not (pc and pc.connected):
+                self._publish_ctrl_result("move", False, "printer not connected")
+                return
+
+            # 입력 파싱
+            try:
+                mode = str(data.get("mode", "relative")).strip().lower()
+            except Exception:
+                mode = "relative"
+
+            def _to_float(v):
+                try:
+                    return None if v is None else float(v)
+                except Exception:
+                    return None
+
+            x = _to_float(data.get("x"))
+            y = _to_float(data.get("y"))
+            z = _to_float(data.get("z"))
+            e = _to_float(data.get("e"))
+            feedrate = _to_float(data.get("feedrate"))  # mm/min
+
+            # 최소 하나의 축 필요
+            if x is None and y is None and z is None and e is None:
+                self._publish_ctrl_result("move", False, "no axes provided")
+                return
+
+            # 이동 모드 설정
+            try:
+                if mode.startswith("rel"):
+                    pc.send_command("G91")  # 상대 좌표
+                else:
+                    pc.send_command("G90")  # 절대 좌표
+            except Exception:
+                pass
+
+            # 이동 실행: FactorClient 래퍼를 사용해 feedrate 기본값(1000) 적용
+            try:
+                fc = getattr(self, 'fc', None)
+                if fc and hasattr(fc, 'move_axis'):
+                    fc.move_axis(x, y, z, e, feedrate)
+                else:
+                    pc.move_axis(x, y, z, e, feedrate)
+            except Exception as e:
+                err = str(e)
+                self._publish_ctrl_result("move", False, err)
+                return
+
+            # 상대 모드였으면 절대 모드로 복귀
+            if mode.startswith("rel"):
+                try:
+                    pc.send_command("G90")
+                except Exception:
+                    pass
+
+            ok = True
+        except Exception as e:
+            err = str(e)
+
+        self._publish_ctrl_result("move", ok, err)
 
     def _handle_ctrl_home(self, msg):
         axes = ""
