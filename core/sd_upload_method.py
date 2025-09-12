@@ -72,30 +72,39 @@ def _send_with_retry(ser, payload: str, timeout: float = 3.0) -> bool:
         체크섬/비체크섬 혼용 문제를 방지하기 위해 전체 시스템을 비체크섬 모드로 통일합니다.
         백그라운드 폴러와 동일한 모드를 사용하여 안정성을 확보합니다.
     """
-    while True:
-        # 비체크섬 명령 전송 (라인 번호만 포함)
-        command = f"N{payload}\n".encode("ascii", "ignore")
-        ser.write(command)
+    MAX_RETRY = 5  # 내부 상수로 재시도 횟수 제한
+
+    for _ in range(MAX_RETRY):
+        # ★ 핵심: 'N' 접두사 제거하고 평문+개행으로 전송
+        ser.write((payload + "\n").encode("ascii", "ignore"))
         ser.flush()
-        
-        # 응답 대기
+
         end = time.time() + timeout
         while time.time() < end:
-            resp = _readline(ser, timeout=0.5).lower()
+            resp = _readline(ser, timeout=0.5)
             if not resp:
                 continue
-                
-            # 성공 응답 확인
-            if resp.startswith("ok") or ("done saving file" in resp):
+
+            low = resp.lower().strip()
+
+            # 성공
+            if low.startswith("ok") or ("done saving file" in low):
                 return True
-                
-            # 재전송 요청 확인
-            if resp.startswith("resend") or resp.startswith("rs"):
-                # 현재 명령을 재전송하기 위해 루프 계속
+
+            # 바쁨/대기/정보 라인은 무시하고 계속 대기
+            if low.startswith("busy:") or low == "wait":
+                continue
+            if low.startswith("echo:") or low.startswith("t:") or low.startswith("b:"):
+                continue
+
+            # 재전송/에러 → 바깥 for 루프로 가서 같은 명령 재시도
+            if low.startswith("resend") or low.startswith("rs") or low.startswith("error:"):
                 break
-                
-            # 기타 응답 (echo:, t:, busy:, wait 등)은 무시하고 계속 대기
-        # 재전송을 위해 루프 계속
+
+        # 타임아웃 또는 재전송/에러 → 다음 루프에서 재시도
+
+    # 모든 재시도 실패
+    return False
 
 
 # ========== 핵심 업로드 함수 ==========
