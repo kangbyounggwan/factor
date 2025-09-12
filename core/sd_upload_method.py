@@ -26,51 +26,6 @@ except ImportError:
 
 # ========== 유틸리티 함수들 ==========
 
-def _xor(s: str) -> int:
-    """
-    문자열의 XOR 체크섬 계산
-    
-    Marlin 펌웨어에서 사용하는 체크섬 알고리즘으로,
-    각 문자의 ASCII 값을 XOR 연산하여 단일 바이트 체크섬을 생성합니다.
-    
-    Args:
-        s (str): 체크섬을 계산할 문자열
-        
-    Returns:
-        int: 계산된 체크섬 값 (0-255)
-        
-    Example:
-        >>> _xor("G28")
-        123
-    """
-    v = 0
-    for ch in s:
-        v ^= ord(ch)
-    return v
-
-
-def _nline(n: int, payload: str) -> bytes:
-    """
-    라인 번호와 체크섬이 포함된 G-code 명령 생성
-    
-    Marlin의 라인 번호링 시스템에 따라 "N{번호} {명령}*{체크섬}" 형식으로
-    명령을 생성합니다. 이를 통해 프린터가 명령의 순서와 무결성을 확인할 수 있습니다.
-    
-    Args:
-        n (int): 라인 번호 (0부터 시작)
-        payload (str): 실제 G-code 명령
-        
-    Returns:
-        bytes: 인코딩된 명령 (ASCII)
-        
-    Example:
-        >>> _nline(1, "G28")
-        b'N1 G28*123\\n'
-    """
-    line = f"N{n} {payload}"
-    return f"{line}*{_xor(line)}\n".encode("ascii", "ignore")
-
-
 def _readline(ser, timeout: float = 2.0) -> str:
     """
     타임아웃이 있는 시리얼 라인 읽기
@@ -97,30 +52,30 @@ def _readline(ser, timeout: float = 2.0) -> str:
     return ""
 
 
-def _send_with_retry(ser, n: int, payload: str, timeout: float = 3.0) -> int:
+def _send_with_retry(ser, payload: str, timeout: float = 3.0) -> bool:
     """
-    순차적 명령 전송 및 재전송 처리
+    비체크섬 명령 전송 및 재전송 처리
     
-    라인 번호가 포함된 명령을 전송하고, 프린터의 응답을 확인합니다.
-    "ok" 또는 "done saving file" 응답을 받으면 다음 라인 번호를 반환하고,
-    "resend" 또는 "rs" 응답을 받으면 같은 라인을 재전송합니다.
+    체크섬 없이 명령을 전송하고, 프린터의 응답을 확인합니다.
+    "ok" 또는 "done saving file" 응답을 받으면 성공으로 처리하고,
+    "resend" 또는 "rs" 응답을 받으면 같은 명령을 재전송합니다.
     
     Args:
         ser: 시리얼 연결 객체
-        n (int): 현재 라인 번호
         payload (str): 전송할 G-code 명령
         timeout (float): 응답 대기 타임아웃 (초)
         
     Returns:
-        int: 다음 라인 번호 (성공 시 n+1)
+        bool: 전송 성공 여부
         
     Note:
-        순차적 모드에서는 한 번에 하나의 명령만 전송하여
-        프린터의 처리 능력에 맞춰 안정성을 확보합니다.
+        체크섬/비체크섬 혼용 문제를 방지하기 위해 전체 시스템을 비체크섬 모드로 통일합니다.
+        백그라운드 폴러와 동일한 모드를 사용하여 안정성을 확보합니다.
     """
     while True:
-        # 명령 전송
-        ser.write(_nline(n, payload))
+        # 비체크섬 명령 전송 (라인 번호만 포함)
+        command = f"N{payload}\n".encode("ascii", "ignore")
+        ser.write(command)
         ser.flush()
         
         # 응답 대기
@@ -132,11 +87,11 @@ def _send_with_retry(ser, n: int, payload: str, timeout: float = 3.0) -> int:
                 
             # 성공 응답 확인
             if resp.startswith("ok") or ("done saving file" in resp):
-                return n + 1
+                return True
                 
             # 재전송 요청 확인
             if resp.startswith("resend") or resp.startswith("rs"):
-                # 현재 라인을 재전송하기 위해 루프 계속
+                # 현재 명령을 재전송하기 위해 루프 계속
                 break
                 
             # 기타 응답 (echo:, t:, busy:, wait 등)은 무시하고 계속 대기
@@ -147,11 +102,11 @@ def _send_with_retry(ser, n: int, payload: str, timeout: float = 3.0) -> int:
 
 def sd_upload(pc, remote_name: str, up_stream, total_bytes: Optional[int] = None, remove_comments: bool = False) -> Dict[str, Any]:
     """
-    SD 카드로 파일 업로드 (M28/M29 프로토콜) - 고속 버전
+    SD 카드로 파일 업로드 (M28/M29 프로토콜) - 고속 비체크섬 버전
     
     Marlin 펌웨어의 M28/M29 프로토콜을 사용하여 파일을 SD 카드에 업로드합니다.
+    전체 업로드 과정을 비체크섬 모드로 처리하여 백그라운드 폴러와의 충돌을 방지합니다.
     M28~M29 사이의 본문은 raw 바이트 스트리밍으로 전송하여 고속 업로드를 구현합니다.
-    라인 번호링과 체크섬은 핸드셰이크에만 사용하고, 본문은 직접 스트리밍합니다.
     
     Args:
         pc: 프린터 통신 객체 (serial_conn, serial_lock 속성 필요)
@@ -169,9 +124,10 @@ def sd_upload(pc, remote_name: str, up_stream, total_bytes: Optional[int] = None
     Raises:
         Exception: 시리얼 통신 오류, 파일 처리 오류 등
         
-    Note:
-        이 함수는 시리얼 락을 사용하여 동시 접근을 방지합니다.
-        업로드 중에는 다른 시리얼 통신이 차단됩니다.
+     Note:
+         이 함수는 시리얼 락을 사용하여 동시 접근을 방지합니다.
+         업로드 중에는 다른 시리얼 통신이 차단됩니다.
+         체크섬/비체크섬 혼용 문제를 방지하기 위해 전체 시스템을 비체크섬 모드로 통일합니다.
     """
     ser = pc.serial_conn
     total_lines = 0
@@ -187,13 +143,12 @@ def sd_upload(pc, remote_name: str, up_stream, total_bytes: Optional[int] = None
         except Exception:
             pass
 
-        n = 0
-        # 라인 번호 동기화 후 파일 열기
+        # 라인 번호 동기화 후 파일 열기 (비체크섬 모드)
         try:
-            n = _send_with_retry(ser, n, "M110 N0", timeout=2.0)
+            _send_with_retry(ser, "M110 N0", timeout=2.0)
         except Exception:
             pass
-        n = _send_with_retry(ser, n, f"M28 {remote_name}", timeout=5.0)
+        _send_with_retry(ser, f"M28 {remote_name}", timeout=5.0)
 
         # 파일 내용 raw 바이트 스트리밍 (고속 전송)
         LOG_BYTES = 512 * 1024  # 512KB마다 진행률 로그
@@ -216,15 +171,22 @@ def sd_upload(pc, remote_name: str, up_stream, total_bytes: Optional[int] = None
             content_bytes = '\n'.join(processed_content).encode('utf-8', 'ignore')
             total_lines = len(processed_content)
             
-            # 청크 단위로 raw 바이트 전송
-            chunk_size = 1024  # 1KB 청크
+            # 청크 단위로 raw 바이트 전송 (flush 최적화)
+            chunk_size = 16 * 1024  # 16KB 청크
+            flush_interval = 64 * 1024  # 64KB마다 flush
+            flush_acc = 0
+            
             for i in range(0, len(content_bytes), chunk_size):
                 chunk = content_bytes[i:i + chunk_size]
                 ser.write(chunk)
-                ser.flush()
-                
                 sent_bytes += len(chunk)
                 acc += len(chunk)
+                flush_acc += len(chunk)
+                
+                # 주기적 flush (드라이버 버퍼/MCU 부하 방지)
+                if flush_acc >= flush_interval:
+                    ser.flush()
+                    flush_acc = 0
                 
                 # 진행률 로깅
                 if (acc >= LOG_BYTES) or (time.time() - last_log >= 1.0):
@@ -237,16 +199,33 @@ def sd_upload(pc, remote_name: str, up_stream, total_bytes: Optional[int] = None
                             current_app.logger.info(f"SD 업로드 진행: {sent_bytes} bytes")
                     acc = 0
                     last_log = time.time()
+            
+            # 최종 flush
+            ser.flush()
         else:
-            # 주석 제거 없이 raw 바이트 스트리밍
+            # 주석 제거 없이 청크 단위 raw 바이트 스트리밍
+            chunk_size = 16 * 1024  # 16KB 청크
+            flush_interval = 64 * 1024  # 64KB마다 flush
+            buffer = bytearray()
+            flush_acc = 0
+            
             for raw in text_stream:
                 line_bytes = raw.encode('utf-8', 'ignore')
-                ser.write(line_bytes)
-                ser.flush()
-                
+                buffer.extend(line_bytes)
                 sent_bytes += len(line_bytes)
                 total_lines += 1
                 acc += len(line_bytes)
+                flush_acc += len(line_bytes)
+                
+                # 청크가 가득 차면 전송
+                if len(buffer) >= chunk_size:
+                    ser.write(buffer)
+                    buffer.clear()
+                
+                # 주기적 flush (드라이버 버퍼/MCU 부하 방지)
+                if flush_acc >= flush_interval:
+                    ser.flush()
+                    flush_acc = 0
                 
                 # 진행률 로깅
                 if (acc >= LOG_BYTES) or (time.time() - last_log >= 1.0):
@@ -259,16 +238,18 @@ def sd_upload(pc, remote_name: str, up_stream, total_bytes: Optional[int] = None
                             current_app.logger.info(f"SD 업로드 진행: {sent_bytes} bytes")
                     acc = 0
                     last_log = time.time()
-
-        # 파일 닫기 및 완료 확인
-        ser.write(b"\nM29\n")
-        ser.flush()
-        _ = _readline(ser, timeout=5.0)  # "ok" 또는 "done saving file" 응답 대기
-        
-        # 라인 번호 리셋
-        try:
-            ser.write(b"\nM110 N0\n")
+            
+            # 남은 버퍼 전송 및 최종 flush
+            if buffer:
+                ser.write(buffer)
             ser.flush()
+
+        # 파일 닫기 및 완료 확인 (비체크섬 모드)
+        _send_with_retry(ser, "M29", timeout=5.0)
+        
+        # 라인 번호 리셋 (비체크섬 모드)
+        try:
+            _send_with_retry(ser, "M110 N0", timeout=2.0)
         except Exception:
             pass
 
@@ -310,6 +291,9 @@ class UploadGuard:
         self.pi = getattr(fc, 'position_poll_interval', None)
         self.mi = getattr(fc, 'm27_poll_interval', None)
         
+        # 원본 rx_paused 상태 저장
+        self.rx_paused_orig = getattr(pc, 'rx_paused', False)
+        
         # 원본 명령 전송 함수 저장
         self.orig_send = getattr(getattr(pc, 'control', None), 'send_command', None)
     
@@ -320,11 +304,15 @@ class UploadGuard:
         - 자동리포트 지원 시: 자동리포트 중지 (M155 S0, M154 S0)
         - 자동리포트 미지원 시: 폴링 간격을 매우 크게 설정하여 일시정지
         - M27 폴링: 항상 간격 조정으로 일시정지
+        - 시리얼 읽기 워커 일시정지 (rx_paused 플래그)
         - 업로드 보호 플래그 설정
         - 명령 전송 함수를 차단 함수로 교체
         - TX inhibit 플래그 설정
         """
         try:
+            # 시리얼 읽기 워커 일시정지 (readline 충돌 방지)
+            setattr(self.pc, 'rx_paused', True)
+            
             # 온도 자동리포트/폴링 중지
             if self.temp_auto_supported is True:
                 # 자동리포트 지원 시: 자동리포트 중지
@@ -364,7 +352,7 @@ class UploadGuard:
             setattr(self.pc, 'tx_inhibit', True)
             
             if current_app and hasattr(current_app, 'logger'):
-                current_app.logger.info("업로드 보호: 자동리포트/폴링 일시정지")
+                current_app.logger.info("업로드 보호: 자동리포트/폴링/워커 일시정지")
         except Exception:
             pass
         return self
@@ -373,6 +361,7 @@ class UploadGuard:
         """
         업로드 보호 해제
         
+        - 시리얼 읽기 워커 재개 (rx_paused 플래그 해제)
         - 자동리포트 지원 시: 자동리포트 재활성화 (M155 S1, M154 S1)
         - 자동리포트 미지원 시: 원본 폴링 간격 복원
         - M27 폴링: 원본 간격 복원
@@ -381,6 +370,9 @@ class UploadGuard:
         - TX inhibit 플래그 해제
         """
         try:
+            # 시리얼 읽기 워커 원본 상태로 복원
+            setattr(self.pc, 'rx_paused', self.rx_paused_orig)
+            
             # 온도 자동리포트/폴링 복원
             if self.temp_auto_supported is True:
                 # 자동리포트 지원 시: 자동리포트 재활성화
@@ -420,7 +412,7 @@ class UploadGuard:
             setattr(self.pc, 'tx_inhibit', False)
             
             if current_app and hasattr(current_app, 'logger'):
-                current_app.logger.info("업로드 보호: 자동리포트/폴링 재개")
+                current_app.logger.info("업로드 보호: 자동리포트/폴링/워커 재개")
         except Exception:
             pass
 
