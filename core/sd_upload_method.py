@@ -147,11 +147,11 @@ def _send_with_retry(ser, n: int, payload: str, timeout: float = 3.0) -> int:
 
 def sd_upload(pc, remote_name: str, up_stream, total_bytes: Optional[int] = None, remove_comments: bool = False) -> Dict[str, Any]:
     """
-    SD 카드로 파일 업로드 (M28/M29 프로토콜)
+    SD 카드로 파일 업로드 (M28/M29 프로토콜) - 고속 버전
     
     Marlin 펌웨어의 M28/M29 프로토콜을 사용하여 파일을 SD 카드에 업로드합니다.
-    라인 번호링과 체크섬을 통해 전송의 무결성을 보장하며,
-    재전송 요청에 대응하여 안정적인 업로드를 수행합니다.
+    M28~M29 사이의 본문은 raw 바이트 스트리밍으로 전송하여 고속 업로드를 구현합니다.
+    라인 번호링과 체크섬은 핸드셰이크에만 사용하고, 본문은 직접 스트리밍합니다.
     
     Args:
         pc: 프린터 통신 객체 (serial_conn, serial_lock 속성 필요)
@@ -195,40 +195,70 @@ def sd_upload(pc, remote_name: str, up_stream, total_bytes: Optional[int] = None
             pass
         n = _send_with_retry(ser, n, f"M28 {remote_name}", timeout=5.0)
 
-        # 파일 내용 스트리밍 (순차적 전송)
+        # 파일 내용 raw 바이트 스트리밍 (고속 전송)
         LOG_BYTES = 512 * 1024  # 512KB마다 진행률 로그
         acc = 0
         last_log = time.time()
         
-        for raw in text_stream:
-            payload = raw.rstrip("\r\n")
+        # 주석 제거가 필요한 경우 텍스트 모드로 처리
+        if remove_comments:
+            processed_content = []
+            for raw in text_stream:
+                payload = raw.rstrip("\r\n")
+                if payload:
+                    comment_pos = payload.find(';')
+                    if comment_pos >= 0:
+                        payload = payload[:comment_pos].rstrip()
+                if payload:  # 빈 라인 제외
+                    processed_content.append(payload)
             
-            # 주석 제거 (옵션)
-            if remove_comments and payload:
-                # 세미콜론 이후 부분 제거 (주석 제거)
-                comment_pos = payload.find(';')
-                if comment_pos >= 0:
-                    payload = payload[:comment_pos].rstrip()
+            # 처리된 내용을 바이트로 변환하여 스트리밍
+            content_bytes = '\n'.join(processed_content).encode('utf-8', 'ignore')
+            total_lines = len(processed_content)
             
-            n = _send_with_retry(ser, n, payload or "", timeout=4.0)
-            total_lines += 1
-            
-            # 바이트 수 계산 (라인 종료 문자 포함)
-            b = len(payload.encode("utf-8", "ignore")) + 1
-            sent_bytes += b
-            acc += b
-            
-            # 진행률 로깅 (512KB마다 또는 1초마다)
-            if (acc >= LOG_BYTES) or (time.time() - last_log >= 1.0):
-                if total_bytes:
-                    pct = (sent_bytes / total_bytes) * 100.0
-                    if current_app and hasattr(current_app, 'logger'):
-                        current_app.logger.info(f"SD 업로드 진행: {sent_bytes}/{total_bytes} bytes ({pct:.1f}%)")
-                else:
-                    if current_app and hasattr(current_app, 'logger'):
-                        current_app.logger.info(f"SD 업로드 진행: {sent_bytes} bytes")
-                acc = 0
-                last_log = time.time()
+            # 청크 단위로 raw 바이트 전송
+            chunk_size = 1024  # 1KB 청크
+            for i in range(0, len(content_bytes), chunk_size):
+                chunk = content_bytes[i:i + chunk_size]
+                ser.write(chunk)
+                ser.flush()
+                
+                sent_bytes += len(chunk)
+                acc += len(chunk)
+                
+                # 진행률 로깅
+                if (acc >= LOG_BYTES) or (time.time() - last_log >= 1.0):
+                    if total_bytes:
+                        pct = (sent_bytes / total_bytes) * 100.0
+                        if current_app and hasattr(current_app, 'logger'):
+                            current_app.logger.info(f"SD 업로드 진행: {sent_bytes}/{total_bytes} bytes ({pct:.1f}%)")
+                    else:
+                        if current_app and hasattr(current_app, 'logger'):
+                            current_app.logger.info(f"SD 업로드 진행: {sent_bytes} bytes")
+                    acc = 0
+                    last_log = time.time()
+        else:
+            # 주석 제거 없이 raw 바이트 스트리밍
+            for raw in text_stream:
+                line_bytes = raw.encode('utf-8', 'ignore')
+                ser.write(line_bytes)
+                ser.flush()
+                
+                sent_bytes += len(line_bytes)
+                total_lines += 1
+                acc += len(line_bytes)
+                
+                # 진행률 로깅
+                if (acc >= LOG_BYTES) or (time.time() - last_log >= 1.0):
+                    if total_bytes:
+                        pct = (sent_bytes / total_bytes) * 100.0
+                        if current_app and hasattr(current_app, 'logger'):
+                            current_app.logger.info(f"SD 업로드 진행: {sent_bytes}/{total_bytes} bytes ({pct:.1f}%)")
+                    else:
+                        if current_app and hasattr(current_app, 'logger'):
+                            current_app.logger.info(f"SD 업로드 진행: {sent_bytes} bytes")
+                    acc = 0
+                    last_log = time.time()
 
         # 파일 닫기 및 완료 확인
         ser.write(b"\nM29\n")
@@ -393,61 +423,6 @@ class UploadGuard:
                 current_app.logger.info("업로드 보호: 자동리포트/폴링 재개")
         except Exception:
             pass
-
-
-# ========== 성능 테스트 유틸리티 ==========
-
-def benchmark_comment_removal(gcode_content: str) -> Dict[str, Any]:
-    """
-    주석 제거 성능 벤치마크
-    
-    Args:
-        gcode_content (str): 테스트할 G-code 내용
-        
-    Returns:
-        Dict[str, Any]: 성능 측정 결과
-    """
-    import time
-    
-    lines = gcode_content.split('\n')
-    
-    # 원본 크기 측정
-    original_size = len(gcode_content.encode('utf-8'))
-    original_lines = len([line for line in lines if line.strip()])
-    
-    # 주석 제거 성능 측정
-    start_time = time.time()
-    processed_lines = []
-    for line in lines:
-        payload = line.rstrip("\r\n")
-        if payload:
-            comment_pos = payload.find(';')
-            if comment_pos >= 0:
-                payload = payload[:comment_pos].rstrip()
-        if payload:  # 빈 라인 제외
-            processed_lines.append(payload)
-    
-    processing_time = time.time() - start_time
-    
-    # 처리 후 크기 측정
-    processed_content = '\n'.join(processed_lines)
-    processed_size = len(processed_content.encode('utf-8'))
-    processed_lines_count = len(processed_lines)
-    
-    # 절약률 계산
-    size_reduction = original_size - processed_size
-    size_reduction_percent = (size_reduction / original_size * 100) if original_size > 0 else 0
-    
-    return {
-        'original_size': original_size,
-        'processed_size': processed_size,
-        'size_reduction': size_reduction,
-        'size_reduction_percent': size_reduction_percent,
-        'original_lines': original_lines,
-        'processed_lines': processed_lines_count,
-        'processing_time_ms': processing_time * 1000,
-        'lines_per_second': len(lines) / processing_time if processing_time > 0 else 0
-    }
 
 
 # ========== 파일 처리 유틸리티 ==========
