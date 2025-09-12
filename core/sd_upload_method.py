@@ -319,49 +319,44 @@ class UploadGuard:
         - TX inhibit 플래그 설정
         """
         try:
-            # 시리얼 읽기 워커 일시정지 (readline 충돌 방지)
-            setattr(self.pc, 'rx_paused', True)
-            
-            # 온도 자동리포트/폴링 중지
+            # 1) 리더 스레드 정지 요청 & ACK 대기 (있으면)
+            if hasattr(self.pc, "pause_rx"):
+                self.pc.pause_rx(block=True, timeout=1.0)
+            else:
+                # 구버전 호환(메서드 없으면 기존 폴백)
+                setattr(self.pc, "rx_paused", True)
+                time.sleep(0.05)
+
+            # 2) 자동리포트/폴링 정지 (리더가 멈춘 뒤라 race가 줄어듦)
             if self.temp_auto_supported is True:
-                # 자동리포트 지원 시: 자동리포트 중지
                 try:
                     self.pc.send_command("M155 S0")
                 except Exception:
                     pass
-            elif self.temp_auto_supported is False:
-                # 자동리포트 미지원 시: 폴링 간격 조정
-                if self.ti is not None:
-                    self.fc.temp_poll_interval = 1e9
-            
-            # 위치 자동리포트/폴링 중지
+            elif self.temp_auto_supported is False and self.ti is not None:
+                self.fc.temp_poll_interval = 1e9
+
             if self.pos_auto_supported is True:
-                # 자동리포트 지원 시: 자동리포트 중지
                 try:
                     self.pc.send_command("M154 S0")
                 except Exception:
                     pass
-            elif self.pos_auto_supported is False:
-                # 자동리포트 미지원 시: 폴링 간격 조정
-                if self.pi is not None:
-                    self.fc.position_poll_interval = 1e9
-            
-            # M27 폴링 중지 (항상 폴링 사용)
+            elif self.pos_auto_supported is False and self.pi is not None:
+                self.fc.position_poll_interval = 1e9
+
             if self.mi is not None:
                 self.fc.m27_poll_interval = 1e9
-                
-            # 업로드 보호 플래그 설정
-            setattr(self.fc, '_upload_guard_active', True)
-            
-            # 명령 전송 차단
+
+            # 3) 업로드 보호/송신 차단
+            setattr(self.fc, "_upload_guard_active", True)
+            setattr(self.pc, "tx_inhibit", True)
+
+            # 4) 마지막에만 외부 명령 전송 차단 (위의 M155/M154을 방해하지 않도록)
             if self.orig_send:
                 self.pc.control.send_command = lambda *_a, **_k: False
-                
-            # TX inhibit 설정
-            setattr(self.pc, 'tx_inhibit', True)
-            
-            if current_app and hasattr(current_app, 'logger'):
-                current_app.logger.info("업로드 보호: 자동리포트/폴링/워커 일시정지")
+
+            if current_app and hasattr(current_app, "logger"):
+                current_app.logger.info("업로드 보호: 자동리포트/폴링/워커 일시정지(ACK 대기 완료)")
         except Exception:
             pass
         return self
@@ -379,52 +374,44 @@ class UploadGuard:
         - TX inhibit 플래그 해제
         """
         try:
-            # 시리얼 읽기 워커 원본 상태로 복원
-            setattr(self.pc, 'rx_paused', self.rx_paused_orig)
-            
-            # 온도 자동리포트/폴링 복원
+            # 1) 자동리포트/폴링 복원
             if self.temp_auto_supported is True:
-                # 자동리포트 지원 시: 자동리포트 재활성화
                 try:
                     self.pc.send_command("M155 S1")
                 except Exception:
                     pass
-            elif self.temp_auto_supported is False:
-                # 자동리포트 미지원 시: 폴링 간격 복원
-                if self.ti is not None:
-                    self.fc.temp_poll_interval = self.ti
-            
-            # 위치 자동리포트/폴링 복원
+            elif self.temp_auto_supported is False and self.ti is not None:
+                self.fc.temp_poll_interval = self.ti
+
             if self.pos_auto_supported is True:
-                # 자동리포트 지원 시: 자동리포트 재활성화
                 try:
                     self.pc.send_command("M154 S1")
                 except Exception:
                     pass
-            elif self.pos_auto_supported is False:
-                # 자동리포트 미지원 시: 폴링 간격 복원
-                if self.pi is not None:
-                    self.fc.position_poll_interval = self.pi
-            
-            # M27 폴링 복원 (항상 폴링 사용)
+            elif self.pos_auto_supported is False and self.pi is not None:
+                self.fc.position_poll_interval = self.pi
+
             if self.mi is not None:
                 self.fc.m27_poll_interval = self.mi
-                
-            # 업로드 보호 플래그 해제
-            setattr(self.fc, '_upload_guard_active', False)
-            
-            # 원본 명령 전송 함수 복원
+
+            # 2) 업로드 보호/송신 차단 해제
+            setattr(self.fc, "_upload_guard_active", False)
+            setattr(self.pc, "tx_inhibit", False)
+
+            # 3) 명령 전송 함수 복원
             if self.orig_send:
                 self.pc.control.send_command = self.orig_send
-                
-            # TX inhibit 해제
-            setattr(self.pc, 'tx_inhibit', False)
-            
-            if current_app and hasattr(current_app, 'logger'):
+
+            # 0) 리더 재개 (ACK가 필요한 명령을 보내기 전에!)
+            if hasattr(self.pc, "resume_rx"):
+                self.pc.resume_rx()
+            else:
+                setattr(self.pc, "rx_paused", self.rx_paused_orig)
+
+            if current_app and hasattr(current_app, "logger"):
                 current_app.logger.info("업로드 보호: 자동리포트/폴링/워커 재개")
         except Exception:
             pass
-
 
 # ========== 파일 처리 유틸리티 ==========
 
