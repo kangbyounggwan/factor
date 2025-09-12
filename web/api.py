@@ -16,6 +16,12 @@ import tempfile
 import io
 import uuid
 
+# SD 업로드 모듈 import
+from core.sd_upload_method import (
+    sd_upload, UploadGuard, validate_upload_request, 
+    prepare_upload_stream, cleanup_temp_file
+)
+
 api_bp = Blueprint('api', __name__)
 logger = logging.getLogger('api')
 
@@ -722,498 +728,54 @@ def sd_cancel_print():
 
 @api_bp.route('/printer/sd/upload', methods=['POST'])
 def upload_sd_file():
-    """G-code 파일을 프린터 SD 카드로 업로드(M28/M29)"""
+    """G-code 파일을 프린터 SD 카드로 업로드(M28/M29) - 리팩토링된 간단한 버전"""
+    # Factor client 및 프린터 연결 확인
+    fc = getattr(current_app, 'factor_client', None)
+    if not fc or not hasattr(fc, 'printer_comm'):
+        return jsonify({'success': False, 'error': 'Factor client not available'}), 503
+    
+    pc = fc.printer_comm
+    if not getattr(pc, 'connected', False) or not (pc.serial_conn and pc.serial_conn.is_open):
+        return jsonify({'success': False, 'error': 'printer not connected'}), 503
+
+    # 프린터 상태 확인 (cooling/finishing 중이면 업로드 차단)
     try:
-        fc = current_app.factor_client
-        if not fc or not hasattr(fc, 'printer_comm'):
-            return jsonify({'success': False, 'error': 'Factor client not available'}), 503
-        pc = fc.printer_comm
+        if hasattr(pc, 'control') and pc.control:
+            phase = pc.control.get_phase_snapshot().get('phase', 'unknown')
+            if phase in ('finishing', 'cooling'):
+                return jsonify({'success': False, 'error': 'Printer is cooling/finishing'}), 409
+    except Exception:
+        pass
 
-        try:
-            if hasattr(pc, 'control') and pc.control:
-                phase = pc.control.get_phase_snapshot().get('phase', 'unknown')
-                if phase in ('finishing', 'cooling'):
-                    return jsonify({'success': False, 'error': 'Printer is cooling/finishing'}), 409
-        except Exception:
-            pass
+    # 업로드 요청 검증
+    success, remote_name, error_msg = validate_upload_request(request)
+    if not success:
+        return jsonify({'success': False, 'error': error_msg}), 400
 
-        if 'file' not in request.files:
-            return jsonify({'success': False, 'error': 'file field missing'}), 400
-        upfile = request.files['file']
-        if upfile.filename == '':
-            return jsonify({'success': False, 'error': 'no filename'}), 400
+    # 업로드 스트림 준비
+    upfile = request.files['file']
+    up_stream, total_bytes, tmp_path = prepare_upload_stream(upfile)
 
-        # 원격 파일명
-        name_override = (request.form.get('name') or '').strip()
-        remote_name = name_override if name_override else upfile.filename
-        remote_name = re.sub(r'[^A-Za-z0-9._/\-]+', '_', remote_name).lstrip('/')
-        if not remote_name:
-            return jsonify({'success': False, 'error': 'invalid remote name'}), 400
-
-        # 직접 시리얼에 동기 기록(바이너리 청크)하여 CPU 과점유/경합 방지
-        total_lines = 0
-        total_bytes = 0
-        if not pc.connected or not (pc.serial_conn and pc.serial_conn.is_open):
-            return jsonify({'success': False, 'error': 'printer not connected'}), 503
-
-        # 업로드 스트림을 바이너리로 읽기
-        up_stream = upfile.stream  # Werkzeug FileStorage stream (binary)
-        temp_path = None  # 사이즈 추정 실패 시 임시 파일 경로
-        # 총 크기/총 청크 수 추정
-        total_target = None
-        try:
-            if getattr(upfile, 'content_length', None):
-                total_target = int(upfile.content_length)
-        except Exception:
-            total_target = None
-        if total_target is None:
-            try:
-                cur = up_stream.tell()
-                up_stream.seek(0, os.SEEK_END)
-                total_target = up_stream.tell()
-                up_stream.seek(cur, os.SEEK_SET)
-            except Exception:
-                total_target = None
-        # 여전히 알 수 없으면 임시 파일로 저장 후 크기 산정
-        if total_target is None:
-            try:
-                tmp = tempfile.NamedTemporaryFile(delete=False)
-                temp_path = tmp.name
-                tmp.close()
-                try:
-                    try:
-                        up_stream.seek(0, os.SEEK_SET)
-                    except Exception:
-                        pass
-                    # werkzeug FileStorage는 save 지원
-                    upfile.save(temp_path)
-                except Exception:
-                    # 수동 복사
-                    with open(temp_path, 'wb') as _f:
-                        while True:
-                            data = up_stream.read(65536)
-                            if not data:
-                                break
-                            _f.write(data)
-                total_target = os.path.getsize(temp_path)
-                up_stream = open(temp_path, 'rb')
-            except Exception:
-                temp_path = None
-                total_target = None
-
-        # 업로드 보호: 폴링 일시정지 + 잔여 큐 정리 + (선택) 임의 전송 차단
-        orig_temp = getattr(fc, 'temp_poll_interval', 2.0)
-        orig_pos = getattr(fc, 'position_poll_interval', 5.0)
-        try:
-            fc.temp_poll_interval = 1e9
-            fc.position_poll_interval = 1e9
-            setattr(fc, '_upload_guard_active', True)
-            (current_app.logger if hasattr(current_app, 'logger') else logger).info("업로드 보호: 폴링 일시정지 시작")
-        except Exception:
-            pass
-        try:
-            time.sleep(0.15)  # 폴링 스레드가 긴 sleep으로 진입하게 유도
-        except Exception:
-            pass
-        try:
-            if hasattr(pc, 'clear_command_queue'):
-                pc.clear_command_queue()
-        except Exception:
-            pass
-
-        # 강화 옵션: 업로드 중 임의 명령 큐잉 차단 + 전면 TX inhibit 게이트
-        orig_send = getattr(pc.control, 'send_command', None) if hasattr(pc, 'control') and pc.control else None
-        def _blocked_send(_cmd: str, priority: bool = False) -> bool:
-            return False
-        if orig_send:
-            try:
-                pc.control.send_command = _blocked_send  # type: ignore[attr-defined]
-            except Exception:
-                pass
-        # 전면 차단 게이트 on (업로드 시작 지점에서 즉시 적용)
-        try:
-            setattr(pc, 'tx_inhibit', True)
-        except Exception:
-            pass
-
-        def _restore_polling_and_send():
-            try:
-                fc.temp_poll_interval = orig_temp
-                fc.position_poll_interval = orig_pos
-                setattr(fc, '_upload_guard_active', False)
-                (current_app.logger if hasattr(current_app, 'logger') else logger).info("업로드 보호: 폴링 재개")
-            except Exception:
-                pass
-            if orig_send:
-                try:
-                    pc.control.send_command = orig_send  # type: ignore[attr-defined]
-                except Exception:
-                    pass
-            # 전면 차단 게이트 off
-            try:
-                setattr(pc, 'tx_inhibit', False)
-            except Exception:
-                pass
-
-        # 업로드 전 프린터 유휴 대기(M400) - 시작점에서 전면 차단/폴링 일시정지/입력버퍼 정리, RX 일시정지
-        try:
-            try:
-                setattr(pc, 'tx_inhibit', True)
-            except Exception:
-                pass
-            try:
-                setattr(pc, 'rx_paused', True)
-            except Exception:
-                pass
-            try:
-                if pc.serial_conn and pc.serial_conn.is_open:
-                    pc.serial_conn.reset_input_buffer()
-            except Exception:
-                pass
-            pc.send_command_and_wait('M400', timeout=5.0)
-        except Exception:
-            pass
-
-        # 시리얼 대기 헬퍼(업로드 루틴 내부에서만 사용)
-
-        def wait_for_regex(pattern: str, timeout: float = 5.0):
-            """패턴이 보이면 (True, matched_line), 아니면 (False, None)"""
-            ser = pc.serial_conn
-            try:
-                deadline = time.time() + float(timeout)
-                rx_ok   = re.compile(pattern, re.IGNORECASE)
-                rx_fail = re.compile(r"(open failed|no sd|error:)", re.IGNORECASE)
-                while time.time() < deadline:
-                    line = ser.readline()
-                    if not line:
-                        # 잔여 버퍼 비우기 (CR/LF 분리 고려)
-                        if ser.in_waiting:
-                            chunk = ser.read(ser.in_waiting).decode('utf-8','ignore')
-                            for part in chunk.replace('\r','\n').split('\n'):
-                                s = part.strip()
-                                if not s: continue
-                                if rx_fail.search(s): return False, s
-                                if rx_ok.search(s):   return True, s
-                        time.sleep(0.01)
-                        continue
-
-                    s = line.decode('utf-8','ignore').strip()
-                    if not s: 
-                        continue
-                    if rx_fail.search(s):
-                        return False, s
-                    if rx_ok.search(s):
-                        return True, s
-            except Exception:
-                pass
-            return False, None
-
-        def wait_ok(timeout: float = 5.0):
-            """ok 또는 done saving file 을 ok로 간주"""
-            ok, s = wait_for_regex(r"^(ok\b)|(^done saving file)", timeout)
-            return ok
-
-
-        with pc.serial_lock:
-            # 핸드셰이크 구간에서는 RX 워커 레이스를 피하기 위해 잠시 동기 모드로 전환
-            pc.sync_mode = True
-            try:
-                # 절충: 업로드 시작 전 혹시 모를 SD 인쇄/오토스타트 중단 → SD 초기화 → 진입
-
-                pc.serial_conn.write(b"M21\n"); pc.serial_conn.flush(); time.sleep(0.1)
-                pc.serial_conn.write(b"M27\n"); pc.serial_conn.flush()
-                if wait_for_regex(r'sd printing byte', timeout=1.0):
-                    pc.serial_conn.write(b"M524\n"); pc.serial_conn.flush()
-                    wait_ok(2.0)
-                    # 필요하면 재마운트
-                    pc.serial_conn.write(b"M22\n"); pc.serial_conn.flush(); wait_ok(2.0)
-                    pc.serial_conn.write(b"M21\n"); pc.serial_conn.flush(); wait_ok(2.0)
-                    
-                # Begin write (진입)
-                pc.serial_conn.write((f"M28 {remote_name}\n").encode('utf-8'))
-                pc.serial_conn.flush(); time.sleep(0.05)
-
-                # Handshake: M28 진입 확인 (에코/안내 라인 대기)
-                try:
-                    def _check_engaged(timeout: float = 5.0) -> bool:
-                        end = time.time() + timeout
-                        while time.time() < end:
-                            line = pc.serial_conn.readline()
-                            if not line:
-                                time.sleep(0.01); continue
-                            s = line.decode('utf-8', errors='ignore').strip().lower()
-                            # 다양한 펌웨어 메시지 수용
-                            if (
-                                ('writing to file' in s) or
-                                ('file opened' in s) or
-                                ('now fresh file' in s) or
-                                ('begin file write' in s) or
-                                ('opening file' in s)
-                            ):
-                                return True
-                            # 명시 실패 메시지 조기 중단
-                            if ('open failed' in s) or ('no sd' in s):
-                                return False
-                            break
-                        return False
-
-                    engaged = _check_engaged(timeout=5.0)
-                    if not engaged:
-                        # Fallback: 재마운트 후 재시도 (실패해도 여기서 중단하지 않음)
-                        try:
-                            pc.serial_conn.write(b"M29\n"); pc.serial_conn.flush(); time.sleep(0.05)
-                        except Exception:
-                            pass
-                        try:
-                            pc.serial_conn.write(b"M22\n"); pc.serial_conn.flush(); wait_ok(2.0)
-                            pc.serial_conn.write(b"M21\n"); pc.serial_conn.flush(); wait_ok(2.0)
-                            pc.serial_conn.write((f"M28 {remote_name}\n").encode('utf-8')); pc.serial_conn.flush(); time.sleep(0.05)
-                            _ = _check_engaged(timeout=3.0)
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-
-                # 진입 성공 시 RX 워커 재가동( busy:/ok 처리를 위해 )
-                pc.sync_mode = False
-                try:
-                    setattr(pc, 'rx_paused', False)
-                except Exception:
-                    pass
-
-                # ===== N-라인 체크섬 기반 전송 유틸 =====
-                def xor_cs(s: str) -> int:
-                    v = 0
-                    for ch in s:
-                        v ^= ord(ch)
-                    return v
-
-                def send_nline(ser, n: int, payload: str, timeout: float = 2.5):
-                    line = f"N{n} {payload}"
-                    cs = xor_cs(line)
-                    ser.write((line + f"*{cs}\n").encode("ascii", "ignore"))
-                    ser.flush()
-                    deadline = time.time() + timeout
-                    while time.time() < deadline:
-                        resp = ser.readline().decode("utf-8", "ignore").strip()
-                        if not resp:
-                            time.sleep(0.01); continue
-                        low = resp.lower()
-                        # 즉시 에러 로그(라인넘버/체크섬 관련)
-                        if ("line number is not last line number+1" in low) or ("no checksum with line number" in low):
-                            (current_app.logger if hasattr(current_app, 'logger') else logger).error(f"SD 업로드 오류: {resp}")
-                        if low.startswith("ok") or ("done saving file" in low):
-                            return n + 1, None
-                        if low.startswith("resend") or low.startswith("rs"):
-                            try:
-                                import re as _re
-                                m = _re.search(r"(?:resend|rs)[:\s]+(\d+)", low)
-                                if m:
-                                    k = int(m.group(1))
-                                    return None, k
-                            except Exception:
-                                pass
-                        # 기타 에러는 지속 관찰
-                    return None, 'timeout'
-
-                def send_with_cs(ser, n: int, payload: str, timeout: float = 2.5) -> int:
-                    attempts = 0
-                    while True:
-                        nxt, resend_to = send_nline(ser, n, payload, timeout)
-                        if resend_to is None and isinstance(nxt, int):
-                            return nxt
-                        if isinstance(resend_to, int):
-                            n = resend_to
-                            attempts += 1
-                            if attempts > 100:
-                                raise RuntimeError("too many resends")
-                            continue
-                        raise RuntimeError(f"send_nline failed: {resend_to}")
-
-                # 진행 로그 주기 제한(바이트/시간)
-                LOG_INTERVAL_BYTES = 512 * 1024
-                LOG_INTERVAL_SEC = 1.0
-                bytes_since_log = 0
-                try:
-                    # 너무 잦은 로그는 journald/파일 로거에서 드롭될 수 있으므로 시작/주기/완료만 기록
-                    (current_app.logger if hasattr(current_app, 'logger') else logger).info(
-                        f"SD 업로드 시작: {remote_name} ({total_target if total_target is not None else '?'} bytes)"
-                    )
-                except Exception:
-                    pass
-                last_log_ts = time.time()
-                # 라인 스트림으로 변환하여 체크섬 전송
-                text_stream = io.TextIOWrapper(up_stream, encoding='utf-8', errors='ignore')
-                nline = 0
-                # 라인 번호 초기화 후(안전) 파일 시작까지 체크섬으로 전송
-                try:
-                    nline = send_with_cs(pc.serial_conn, nline, "M110 N0", timeout=2.0)
-                except Exception:
-                    pass
-                try:
-                    nline = send_with_cs(pc.serial_conn, nline, f"M28 {remote_name}", timeout=5.0)
-                except Exception:
-                    # 이미 진입 상태일 수 있으나, 실패 시 상위 로직으로 실패 처리됨
-                    pass
-
-                sent_lines = 0
-                for raw_line in text_stream:
-                    line = raw_line.rstrip('\r\n')
-                    nline = send_with_cs(pc.serial_conn, nline, line if line else '', timeout=4.0)
-                    total_lines += 1
-                    sent_lines += 1
-                    ln_bytes = len(line.encode('utf-8', 'ignore')) + 1
-                    total_bytes += ln_bytes
-                    bytes_since_log += ln_bytes
-                    now_ts = time.time()
-                    if (bytes_since_log >= LOG_INTERVAL_BYTES) or ((now_ts - last_log_ts) >= LOG_INTERVAL_SEC):
-                        try:
-                            if total_target is not None and total_target > 0:
-                                pct = (total_bytes / total_target) * 100.0
-                                (current_app.logger if hasattr(current_app, 'logger') else logger).info(
-                                    f"SD 업로드 진행: {total_bytes}/{total_target} bytes ({pct:.1f}%)"
-                                )
-                        except Exception:
-                            pass
-                        try:
-                                (current_app.logger if hasattr(current_app, 'logger') else logger).info(
-                                    f"SD 업로드 진행: {sent_lines} lines ({total_bytes} bytes)"
-                                )
-                        except Exception:
-                            pass
-                        bytes_since_log = 0
-                        last_log_ts = now_ts
-                    # 하트비트 갱신(업로드 중 타임아웃 방지)
-                    try:
-                        fc.last_heartbeat = time.time()
-                    except Exception:
-                        pass
-
-
-                pc.serial_conn.flush()
-                # 장치가 마지막 바이트를 파일로 플러시할 수 있도록 잠시 대기 후 안전하게 M29 전송
-                try:
-                    time.sleep(0.1)
-                except Exception:
-                    pass
-                # End write (분리된 라인 보장을 위해 선행 개행 추가)
-                pc.serial_conn.write(b"\nM29\n"); pc.serial_conn.flush()
-                # M29 전송 후 500ms 대기(장치가 파일 닫기 처리할 여유)
-                try:
-                    time.sleep(1.0)
-                except Exception:
-                    pass
-                # Handshake: 저장 완료 응답 대기
-                try:
-                    end2 = time.time() + 5.0
-                    while time.time() < end2:
-                        line = pc.serial_conn.readline()
-                        if not line:
-                            time.sleep(0.01)
-                            continue
-                        s = line.decode('utf-8', errors='ignore').strip().lower()
-                        if ('done saving file' in s) or s.startswith('ok'):
-                            break
-                except Exception:
-                    pass
-                
-                # 추가 보호: 저장 종료 직후 라인번호/체크섬 대기 상태 초기화(M110 N0) 및 짧은 드레인
-                try:
-                    time.sleep(0.05)
-                    pc.serial_conn.write(b"\nM110 N0\n"); pc.serial_conn.flush()
-                    end3 = time.time() + 1.0
-                    while time.time() < end3:
-                        l2 = pc.serial_conn.readline()
-                        if not l2:
-                            time.sleep(0.01); continue
-                        s2 = l2.decode('utf-8', errors='ignore').strip().lower()
-                        # ok 또는 오류 라인 모두 소거. ok를 받으면 종료
-                        if s2.startswith('ok'):
-                            break
-                except Exception:
-                    pass
-                # 입력 버퍼 정리(잔여 ok/error 제거)
-                try:
-                    pc.serial_conn.reset_input_buffer()
-                except Exception:
-                    pass
-
-                # 디렉터리 반영 보장: 재마운트(M22→M21) 후 오토스타트 차단(M524)
-                try:
-                    pc.serial_conn.write(b"M22\n"); pc.serial_conn.flush(); time.sleep(0.1)
-                    pc.serial_conn.write(b"M21\n"); pc.serial_conn.flush(); time.sleep(0.2)
-                    # 혹시 있을 수 있는 SD 프린트 자동시작 중단
-                    pc.serial_conn.write(b"M524\n"); pc.serial_conn.flush(); time.sleep(0.05)
-                except Exception:
-                    pass
-                end_ok = True
-                try:
-                    (current_app.logger if hasattr(current_app, 'logger') else logger).info(
-                        f"SD 업로드 완료: {remote_name} ({total_bytes} bytes)"
-                    )
-                except Exception:
-                    pass
-            finally:
-                pc.sync_mode = False
-
-        # 임시 파일 정리
-        try:
-            if temp_path:
-                try:
-                    up_stream.close()
-                except Exception:
-                    pass
-                try:
-                    os.remove(temp_path)
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-        # 목록 갱신 및 최종 검증(파일 크기 확인) - 지연/캐시 반영 고려하여 재시도
-        try:
-            target_name = (remote_name or '').strip()
-            tn_lower = target_name.lower()
-            found_size = None
-            for _ in range(6):  # 최대 약 3초(0.5s x 6)
-                pc.send_command_and_wait('M20', timeout=3.0)
-                time.sleep(0.5)
-                info = getattr(pc, 'sd_card_info', {}) or {}
-                files = info.get('files', []) or []
-                found_size = None
-                for f in files:
-                    try:
-                        nm = str(f.get('name', ''))
-                        nl = nm.lower()
-                        if nl == tn_lower or nl.endswith('/' + tn_lower) or tn_lower.endswith('/' + nl) or nl.endswith(tn_lower):
-                            found_size = f.get('size', None)
-                            break
-                    except Exception:
-                        pass
-                if found_size is not None and int(found_size) > 0:
-                    break
-            if found_size is not None and int(found_size) <= 0:
-                return jsonify({'success': False, 'error': 'upload appears empty on SD (0 bytes). Please retry.'}), 500
-        except Exception:
-            pass
-
-        # 폴링/전송 함수 원복 후 성공 반환
-        _restore_polling_and_send()
-        return jsonify({'success': True, 'name': remote_name, 'lines': total_lines, 'bytes': total_bytes, 'closed': bool(end_ok)})
+    try:
+        # 주석 제거 옵션 확인
+        remove_comments = request.form.get('remove_comments', 'false').lower() in ('true', '1', 'yes')
+        
+        # 업로드 보호 및 실행
+        with UploadGuard(fc, pc):
+            current_app.logger.info(f"SD 업로드 시작: {remote_name} ({total_bytes if total_bytes else '?'} bytes, 주석제거={remove_comments})")
+            result = sd_upload(pc, remote_name, up_stream, total_bytes, remove_comments)
+            
+        return jsonify({'success': True, 'name': remote_name, **result})
+        
     except Exception as e:
-        # 종료 시도
-        try:
-            fc = current_app.factor_client
-            if fc and hasattr(fc, 'printer_comm'):
-                fc.printer_comm.send_command('M29')
-        except Exception:
-            pass
-        # 실패 시에도 폴링/전송 함수 원복
-        try:
-            _restore_polling_and_send()
-        except Exception:
-            pass
+        current_app.logger.error(f"SD 업로드 오류: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
+        
+    finally:
+        # 임시 파일 정리
+        cleanup_temp_file(tmp_path, up_stream)
+
+
 
 @api_bp.route('/printer/queue/clear', methods=['POST'])
 def clear_printer_queue():

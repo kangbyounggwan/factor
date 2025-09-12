@@ -131,6 +131,11 @@ class FactorClient:
         self._temp_poll_thread: Optional[threading.Thread] = None
         self._pos_poll_thread: Optional[threading.Thread] = None
         self._m27_poll_thread: Optional[threading.Thread] = None
+        
+        # 폴링 간격 설정 (초)
+        self.temp_poll_interval = 1.0
+        self.position_poll_interval = 1.0
+        self.m27_poll_interval = 3.0
         # M27 ETA 추정기
         try:
             self.m27_eta = EtaEstimator(half_life_s=20.0)
@@ -422,9 +427,9 @@ class FactorClient:
 
     def _fallback_m27_poll_worker(self):
         """M27 진행률 폴링(오토리포트 미사용, 동기 조회)"""
-        interval = 3.0  # 3초 주기
         next_ts = time.monotonic()
         while self.running and self.connected:
+            interval = float(getattr(self, "m27_poll_interval", 3.0))
             try:
                 if self.printer_comm and self.printer_comm.connected:
                     try:

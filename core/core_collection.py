@@ -175,7 +175,11 @@ class DataCollectionModule:
         pc = self.pc
         if pc.error_pattern.search(line):
             pc.logger.error(f"프린터 오류: {line}")
-            pc._set_state(pc.PrinterState.ERROR)
+            # 순환 참조 회피: 현재 상태 enum 클래스에서 상수 접근
+            try:
+                pc._set_state(pc.state.__class__.ERROR)
+            except Exception:
+                pass
             pc._trigger_callback('on_error', line)
             return True
         if pc.ok_pattern.match(line):
@@ -243,7 +247,8 @@ class DataCollectionModule:
             except Exception:
                 pass
             try:
-                self.pc._set_state(self.pc.PrinterState.PRINTING if active else self.pc.PrinterState.OPERATIONAL)
+                enum_cls = self.pc.state.__class__
+                self.pc._set_state(enum_cls.PRINTING if active else enum_cls.OPERATIONAL)
             except Exception:
                 pass
         except Exception:
