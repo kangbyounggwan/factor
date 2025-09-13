@@ -753,7 +753,7 @@ def upload_sd_file():
         return jsonify({'success': False, 'error': error_msg}), 400
 
     # 업로드 스트림 준비
-        upfile = request.files['file']
+    upfile = request.files['file']
     up_stream, total_bytes, tmp_path = prepare_upload_stream(upfile)
 
     try:
