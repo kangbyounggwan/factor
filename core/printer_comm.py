@@ -86,7 +86,7 @@ class PrinterCommunicator:
         
         # 큐 및 버퍼
         self.command_queue = Queue()
-        self.response_queue = Queue()
+        self.response_queue = Queue(maxsize=2048)
         self.send_buffer = []
         self.line_number = 1
         # 동기 전송/수신 보호
@@ -276,6 +276,20 @@ class PrinterCommunicator:
                         if line:
                             self.logger.debug(f"[RX_LINE] {line}")
                             self._process_response(line)
+
+
+                            try:
+                                self.response_queue.put_nowait(RxLine(line=line, ts=time.time()))
+                            except queue.Full:
+                                # 가득 차면 가장 오래된 항목 하나 버리고 다시 시도 (간단한 ring-buffer 동작)
+                                try:
+                                    _ = self.response_queue.get_nowait()
+                                except Exception:
+                                    pass
+                                try:
+                                    self.response_queue.put_nowait(RxLine(line=line, ts=time.time()))
+                                except Exception:
+                                    pass
                             # INFO 레벨일 때 변환(파싱) 데이터 표기
                             try:
                                 if self.logger.getEffectiveLevel() == logging.INFO:
