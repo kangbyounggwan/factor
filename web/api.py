@@ -753,17 +753,20 @@ def upload_sd_file():
         return jsonify({'success': False, 'error': error_msg}), 400
 
     # 업로드 스트림 준비
-    upfile = request.files['file']
+        upfile = request.files['file']
     up_stream, total_bytes, tmp_path = prepare_upload_stream(upfile)
 
     try:
         # 주석 제거 옵션 확인
         remove_comments = request.form.get('remove_comments', 'false').lower() in ('true', '1', 'yes')
         
+        # 업로드 ID 확인 (MQTT에서 넘어온 경우)
+        upload_id = (request.form.get('upload_id') or "").strip()
+        
         # 업로드 보호 및 실행
         with UploadGuard(fc, pc):
-            current_app.logger.info(f"SD 업로드 시작: {remote_name} ({total_bytes if total_bytes else '?'} bytes, 주석제거={remove_comments})")
-            result = sd_upload(pc, remote_name, up_stream, total_bytes, remove_comments)
+            current_app.logger.info(f"SD 업로드 시작: {remote_name} ({total_bytes if total_bytes else '?'} bytes, 주석제거={remove_comments}, upload_id={upload_id})")
+            result = sd_upload(pc, remote_name, up_stream, total_bytes, remove_comments, upload_id)
             
         return jsonify({'success': True, 'name': remote_name, **result})
         

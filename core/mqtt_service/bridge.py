@@ -330,10 +330,15 @@ class MQTTService:
                 total = float(s.get('total') or 0) or 1.0
                 pct = (float(s['received']) / total) * 100.0
                 name = s.get('name') or ''
-                self._publish_ctrl_result(
-                    "sd_upload_progress", True,
-                    f"upload_id={upid} name={name} received={s['received']}/{int(total)} ({pct:.1f}%)"
-                )
+                msg = {
+                    "upload_id": upid,
+                    "stage": "mqtt_chunk",  # MQTT 청크 수신 단계임을 명시
+                    "name": name,
+                    "received_bytes": s['received'],
+                    "total_bytes": int(total),
+                    "percent": round(pct, 1)
+                }
+                self._publish_ctrl_result("sd_upload_progress", True, json.dumps(msg, ensure_ascii=False))
             except Exception:
                 pass
             ok = True
@@ -366,7 +371,7 @@ class MQTTService:
                     content = rf.read()
             except Exception as e:
                 self._publish_ctrl_result("sd_upload", False, f"temp read error: {e}"); return
-            fields = {'name': s['name']}
+            fields = {'name': s['name'], 'upload_id': upid}
             files = {'file': {'filename': s['name'], 'content': content, 'content_type': 'application/octet-stream'}}
             ok2, resp = self._post_local_api('/printer/sd/upload', fields, files=files, as_multipart=True, timeout=300.0)
             if not ok2:
@@ -374,10 +379,16 @@ class MQTTService:
             ok = bool(ok2)
             # 최종 진행률 통지(100%)
             try:
-                self._publish_ctrl_result(
-                    "sd_upload_progress", True,
-                    f"upload_id={upid} name={s.get('name','')} received={s.get('received')}/{s.get('total')} (100.0%)"
-                )
+                msg = {
+                    "upload_id": upid,
+                    "stage": "mqtt_chunk",
+                    "name": s.get('name', ''),
+                    "received_bytes": s.get('received', 0),
+                    "total_bytes": s.get('total', 0),
+                    "percent": 100.0,
+                    "done": True
+                }
+                self._publish_ctrl_result("sd_upload_progress", True, json.dumps(msg, ensure_ascii=False))
             except Exception:
                 pass
             # 정리
