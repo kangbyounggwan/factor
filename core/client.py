@@ -188,10 +188,10 @@ class FactorClient:
         self._start_worker_threads()
         
         # RX 가디언 시작(워커 무정지 보장)
-        # try:
-        #     self._start_rx_guardian()
-        # except Exception:
-        #     pass
+        try:
+            self._start_rx_guardian()
+        except Exception:
+            pass
         
         # 프린터 연결 시도 (실패해도 계속 실행)
         if self._connect_to_printer():
