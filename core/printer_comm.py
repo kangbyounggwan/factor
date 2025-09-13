@@ -60,6 +60,10 @@ class GCodeResponse:
     error_message: Optional[str] = None
 
 
+@dataclass
+class RxLine:
+    line: str
+    ts: float
 
 
 class PrinterCommunicator:
@@ -164,38 +168,6 @@ class PrinterCommunicator:
                 self.logger.error(f"콜백 실행 오류 ({event_type}): {e}")
     
 
-    def _auto_detect_port(self) -> Optional[str]:
-        """프린터 포트 자동 감지"""
-        import serial.tools.list_ports
-        
-        self.logger.info("프린터 포트 자동 감지 중...")
-        
-        # 일반적인 3D 프린터 VID/PID
-        known_vendors = [
-            (0x2341, None),  # Arduino
-            (0x1A86, 0x7523), # CH340
-            (0x0403, 0x6001), # FTDI
-            (0x10C4, 0xEA60), # CP210x
-            (0x2E8A, 0x0005), # Raspberry Pi Pico
-        ]
-        
-        ports = serial.tools.list_ports.comports()
-        
-        for port in ports:
-            # VID/PID 확인
-            for vid, pid in known_vendors:
-                if port.vid == vid and (pid is None or port.pid == pid):
-                    self.logger.info(f"프린터 포트 감지: {port.device} ({port.description})")
-                    return port.device
-            
-            # 설명으로 확인
-            if any(keyword in port.description.lower() for keyword in 
-                   ['arduino', 'ch340', 'ftdi', 'cp210', 'usb serial']):
-                self.logger.info(f"프린터 포트 감지: {port.device} ({port.description})")
-                return port.device
-        
-        self.logger.warning("프린터 포트를 자동으로 찾을 수 없습니다")
-        return None
     
     def _initialize_printer(self):
         """프린터 초기화"""
