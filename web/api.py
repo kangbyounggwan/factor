@@ -734,18 +734,18 @@ def upload_sd_file():
     if not fc or not hasattr(fc, 'printer_comm'):
         return jsonify({'success': False, 'error': 'Factor client not available'}), 503
     
-        pc = fc.printer_comm
+    pc = fc.printer_comm
     if not getattr(pc, 'connected', False) or not (pc.serial_conn and pc.serial_conn.is_open):
         return jsonify({'success': False, 'error': 'printer not connected'}), 503
 
     # 프린터 상태 확인 (cooling/finishing 중이면 업로드 차단)
-        try:
-            if hasattr(pc, 'control') and pc.control:
-                phase = pc.control.get_phase_snapshot().get('phase', 'unknown')
-                if phase in ('finishing', 'cooling'):
-                    return jsonify({'success': False, 'error': 'Printer is cooling/finishing'}), 409
-        except Exception:
-            pass
+    try:
+        if hasattr(pc, 'control') and pc.control:
+            phase = pc.control.get_phase_snapshot().get('phase', 'unknown')
+            if phase in ('finishing', 'cooling'):
+                return jsonify({'success': False, 'error': 'Printer is cooling/finishing'}), 409
+    except Exception:
+        pass
 
     # 업로드 요청 검증
     success, remote_name, error_msg = validate_upload_request(request)
@@ -753,7 +753,7 @@ def upload_sd_file():
         return jsonify({'success': False, 'error': error_msg}), 400
 
     # 업로드 스트림 준비
-        upfile = request.files['file']
+    upfile = request.files['file']
     up_stream, total_bytes, tmp_path = prepare_upload_stream(upfile)
 
     try:

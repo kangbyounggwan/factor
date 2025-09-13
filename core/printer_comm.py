@@ -73,11 +73,7 @@ class PrinterCommunicator:
         self.baudrate = baudrate
         self.serial_conn = None
         self.connected = False
-
-        # 기존 코드에 아래 두 이벤트 추가 (핸드셰이크용)
-        self.rx_pause_req = threading.Event()   # 리더 일시정지 요청
-        self.rx_paused_ack = threading.Event()  # 리더가 실제 멈췄다는 확인(ACK)
-
+        
         # 상태 관리
         self.state = PrinterState.DISCONNECTED
         self.last_response_time = time.time()
@@ -86,7 +82,6 @@ class PrinterCommunicator:
         self.running = False
         self.read_thread = None
         self.send_thread = None
-        self.rx_paused = False
         self.tx_bridge = None  # 비동기 송신 브리지(프로세스 기반)
         
         # 큐 및 버퍼
@@ -245,47 +240,7 @@ class PrinterCommunicator:
                 'connected': state != PrinterState.DISCONNECTED
             }
         )
-
-    # === 리더 일시정지/재개 API (UploadGuard 등에서 호출) ===
-    def pause_rx(self, block: bool = True, timeout: float = 1.0) -> bool:
-        """
-        읽기 워커를 안전하게 일시정지.
-        block=True면 워커가 실제 멈췄다는 ACK를 최대 timeout까지 기다림.
-        """
-        try:
-            self.rx_pause_req.set()
-            # 구버전 호환: 기존 불린 플래그도 세팅
-            self.rx_paused = True
-
-            if block:
-                return self.rx_paused_ack.wait(timeout=timeout)
-            return True
-        except Exception as e:
-            try:
-                self.logger.warning(f"pause_rx 실패(폴백 사용): {e}")
-            except Exception:
-                pass
-            # 폴백: 약간 기다렸다가 진행
-            time.sleep(0.05)
-            return True
-
-    def resume_rx(self) -> bool:
-        """읽기 워커 재개."""
-        try:
-            self.rx_pause_req.clear()
-            self.rx_paused = False
-            # ACK는 워커에서 자동으로 내려줌(=clear)
-            # 여기서도 한번 내려주면 안전
-            self.rx_paused_ack.clear()
-            return True
-        except Exception as e:
-            try:
-                self.logger.warning(f"resume_rx 실패(무시): {e}")
-            except Exception:
-                pass
-            self.rx_paused = False
-            return True
-
+    
     def _read_worker(self):
         """시리얼 읽기 워커"""
         buffer = ""
@@ -294,31 +249,14 @@ class PrinterCommunicator:
             try:
                 # 업로드 핸드셰이크 등에서 RX를 일시 정지할 수 있도록 플래그 확인
                 try:
-                    paused = False
-                    if self.rx_pause_req.is_set():
-                        paused = True
                     if getattr(self, 'rx_paused', False):
-                        paused = True
                         time.sleep(0.01)
                         continue
-                    if paused:
-                        # 실제로 멈췄다고 ACK 올림
-                        self.rx_paused_ack.set()
-                        time.sleep(0.01)
-                        continue
-                    else:
-                        # 멈춤 상태가 아니면 ACK 내림
-                        self.rx_paused_ack.clear()
                 except Exception:
                     pass
-
-
                 if self.sync_mode:
                     time.sleep(0.01)
                     continue
-
-
-
                 if self.serial_conn and self.serial_conn.is_open:
                     # 1) 라인 단위 블로킹 읽기(타임아웃까지 대기)
                     line_bytes = self.serial_conn.readline()  # timeout에 따라 반환
@@ -401,33 +339,10 @@ class PrinterCommunicator:
                 time.sleep(0.01)  # CPU 사용률 조절
                 
             except Exception as e:
-                # pause 중 발생한 no-data 류는 재연결 트리거하지 않음
+                self.logger.error(f"시리얼 읽기 오류: {e}")
+                # 장치 분리/다중 접근 등 치명 오류 발생 시 즉시 재연결 루프 트리거
                 try:
                     msg = str(e).lower()
-                except Exception:
-                    msg = ""
-
-                is_paused_now = False
-                try:
-                    if self.rx_pause_req.is_set() or getattr(self, 'rx_paused', False):
-                        is_paused_now = True
-                except Exception:
-                    pass
-
-                if is_paused_now and (
-                    "returned no data" in msg or
-                    "device disconnected" in msg or
-                    "port is closed" in msg
-                ):
-                    # 업로드/핸드셰이크로 멈춘 상태에서 발생한 예외는 무시
-                    self.logger.debug(f"[RX_IGNORED_WHILE_PAUSED] {e}")
-                    time.sleep(0.02)
-                    continue
-
-                self.logger.error(f"시리얼 읽기 오류: {e}")
-
-                # === 재연결 트리거 (BUGFIX: 'or True' 제거!) ===
-                try:
                     disconnected_hint = (
                         "device disconnected" in msg or
                         "returned no data" in msg or
@@ -436,9 +351,8 @@ class PrinterCommunicator:
                     )
                 except Exception:
                     disconnected_hint = False
-
                 try:
-                    if (not is_paused_now) and (not self._reconnect_pending) and disconnected_hint:
+                    if not self._reconnect_pending and (disconnected_hint or True):
                         self._reconnect_pending = True
                         fc = getattr(self, 'factor_client', None)
                         if fc is not None:
@@ -447,6 +361,7 @@ class PrinterCommunicator:
                             except Exception:
                                 pass
                             try:
+                                # 통신 플래그 정리
                                 self.connected = False
                             except Exception:
                                 pass
@@ -456,8 +371,7 @@ class PrinterCommunicator:
                                 pass
                 except Exception:
                     pass
-
-                time.sleep(0.2)
+                time.sleep(1)
     
     def _send_worker(self):
         """시리얼 전송 워커"""
