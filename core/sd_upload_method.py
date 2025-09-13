@@ -304,14 +304,9 @@ def sd_upload(pc, remote_name: str, up_stream, total_bytes: Optional[int] = None
                     last_log = time.time()
 
         # 파일 닫기 및 완료 확인
-        ser.write(b"\nM29\n")
-        ser.flush()
-        _ = _readline(ser, timeout=5.0)  # "ok" 또는 "done saving file" 응답 대기
-        
-        # 라인 번호 리셋
+        n = _send_with_retry(ser, n, "M29", timeout=10.0)      # ← 번호+체크섬으로 종료
         try:
-            ser.write(b"\nM110 N0\n")
-            ser.flush()
+            n = _send_with_retry(ser, n, "M110 N0", timeout=2.0)  # ← 번호+체크섬으로 라인넘버 리셋
         except Exception:
             pass
 
