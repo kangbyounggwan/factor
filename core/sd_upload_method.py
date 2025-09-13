@@ -310,11 +310,13 @@ def sd_upload(pc, remote_name: str, up_stream, total_bytes: Optional[int] = None
 
         # 파일 닫기 및 완료 확인
         # n = _send_with_retry(ser, n, "M29", timeout=10.0)      # ← 번호+체크섬으로 종료
+        print(f"M110 N0")
         try:
             n = _send_with_retry(ser, n, "M110 N0", timeout=2.0)  # ← 번호+체크섬으로 라인넘버 리셋
         except Exception:
             pass
-
+        
+        print(f"M29")
         ser.write(("M29\n").encode("ascii", "ignore"))
         ser.flush()
 
