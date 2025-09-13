@@ -87,6 +87,7 @@ def _wait_ok_or_keywords(ser, timeout=5.0):
         if not line:
             continue
         if low.startswith("ok") or "writing" in low or "open" in low or "done saving file" in low:
+            print(f"wait_ok_or_keywords: {line}")
             return True
         # 기타 echo:, busy: 등은 무시
     return False
@@ -308,14 +309,6 @@ def sd_upload(pc, remote_name: str, up_stream, total_bytes: Optional[int] = None
                     acc = 0
                     last_log = time.time()
 
-        # 파일 닫기 및 완료 확인
-        # n = _send_with_retry(ser, n, "M29", timeout=10.0)      # ← 번호+체크섬으로 종료
-        print(f"M110 N0")
-        try:
-            n = _send_with_retry(ser, n, "M110 N0", timeout=2.0)  # ← 번호+체크섬으로 라인넘버 리셋
-        except Exception:
-            pass
-        
         print(f"M29")
         ser.write(("M29\n").encode("ascii", "ignore"))
         ser.flush()
