@@ -19,10 +19,17 @@ import time
 import tempfile
 from typing import Optional, Tuple, Dict, Any
 try:
-    from flask import current_app
+    from core.mqtt_service.bridge import MQTTService
+    # 전역 MQTT 서비스 인스턴스 참조를 위한 변수
+    _mqtt_service_instance = None
 except ImportError:
-    # Flask가 없는 환경에서도 동작하도록 fallback
-    current_app = None
+    MQTTService = None
+    _mqtt_service_instance = None
+
+def set_mqtt_service(mqtt_service):
+    """MQTT 서비스 인스턴스를 설정하는 함수"""
+    global _mqtt_service_instance
+    _mqtt_service_instance = mqtt_service
 
 
 # ========== 유틸리티 함수들 ==========
@@ -201,18 +208,7 @@ def sd_upload(pc, remote_name: str, up_stream, total_bytes: Optional[int] = None
         def _pub_progress():
             """MQTT로 업로드 진행률 발행"""
             try:
-                current_app = None
-                try:
-                    import flask
-                    current_app = flask.current_app
-                except ImportError:
-                    pass
-                
-                if not current_app:
-                    return
-                    
-                bridge = getattr(current_app, 'mqtt_bridge', None)
-                if not bridge:
+                if not _mqtt_service_instance:
                     return
                     
                 # 진행률 메시지 구성
@@ -226,7 +222,7 @@ def sd_upload(pc, remote_name: str, up_stream, total_bytes: Optional[int] = None
                 }
                 
                 # MQTT로 진행률 발행
-                bridge._publish_ctrl_result("sd_upload_progress", True, json.dumps(msg, ensure_ascii=False))
+                _mqtt_service_instance._publish_ctrl_result("sd_upload_progress", True, json.dumps(msg, ensure_ascii=False))
             except Exception:
                 pass
 
@@ -265,11 +261,9 @@ def sd_upload(pc, remote_name: str, up_stream, total_bytes: Optional[int] = None
                 if (acc >= LOG_BYTES) or (time.time() - last_log >= 1.0):
                     if total_bytes:
                         pct = (sent_bytes / total_bytes) * 100.0
-                        if current_app and hasattr(current_app, 'logger'):
-                            current_app.logger.info(f"SD 업로드 진행: {sent_bytes}/{total_bytes} bytes ({pct:.1f}%)")
+                        print(f"SD 업로드 진행: {sent_bytes}/{total_bytes} bytes ({pct:.1f}%)")
                     else:
-                        if current_app and hasattr(current_app, 'logger'):
-                            current_app.logger.info(f"SD 업로드 진행: {sent_bytes} bytes")
+                        print(f"SD 업로드 진행: {sent_bytes} bytes")
                     
                     # MQTT로 진행률 발행
                     _pub_progress()
@@ -291,11 +285,9 @@ def sd_upload(pc, remote_name: str, up_stream, total_bytes: Optional[int] = None
                 if (acc >= LOG_BYTES) or (time.time() - last_log >= 1.0):
                     if total_bytes:
                         pct = (sent_bytes / total_bytes) * 100.0
-                        if current_app and hasattr(current_app, 'logger'):
-                            current_app.logger.info(f"SD 업로드 진행: {sent_bytes}/{total_bytes} bytes ({pct:.1f}%)")
+                        print(f"SD 업로드 진행: {sent_bytes}/{total_bytes} bytes ({pct:.1f}%)")
                     else:
-                        if current_app and hasattr(current_app, 'logger'):
-                            current_app.logger.info(f"SD 업로드 진행: {sent_bytes} bytes")
+                        print(f"SD 업로드 진행: {sent_bytes} bytes")
                     
                     # MQTT로 진행률 발행
                     _pub_progress()
@@ -312,14 +304,7 @@ def sd_upload(pc, remote_name: str, up_stream, total_bytes: Optional[int] = None
 
         # 최종 100% 진행률 발행
         try:
-            current_app = None
-            try:
-                import flask
-                current_app = flask.current_app
-            except ImportError:
-                pass
-            
-            if current_app and hasattr(current_app, 'mqtt_bridge'):
+            if _mqtt_service_instance:
                 msg = {
                     "upload_id": upload_id,
                     "stage": "to_printer",
@@ -329,7 +314,7 @@ def sd_upload(pc, remote_name: str, up_stream, total_bytes: Optional[int] = None
                     "percent": 100.0 if total_bytes else None,
                     "done": True,
                 }
-                current_app.mqtt_bridge._publish_ctrl_result(
+                _mqtt_service_instance._publish_ctrl_result(
                     "sd_upload_progress", True, json.dumps(msg, ensure_ascii=False))
         except Exception:
             pass
@@ -431,8 +416,7 @@ class UploadGuard:
             self.pc.sync_mode = True
 
             time.sleep(0.1)
-            if current_app and hasattr(current_app, 'logger'):
-                current_app.logger.info("업로드 보호: 자동리포트/폴링 일시정지")
+            print("업로드 보호: 자동리포트/폴링 일시정지")
         except Exception:
             pass
         return self
@@ -496,8 +480,7 @@ class UploadGuard:
             except Exception:
                 pass
 
-            if current_app and hasattr(current_app, 'logger'):
-                current_app.logger.info("업로드 보호: 자동리포트/폴링 재개")
+            print("업로드 보호: 자동리포트/폴링 재개")
         except Exception:
             pass
 

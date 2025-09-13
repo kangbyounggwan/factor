@@ -97,6 +97,14 @@ class FactorClientFirmware:
                 from core.mqtt_service import MQTTService
                 self.mqtt_service = MQTTService(self.config_manager, self.factor_client)
                 self.mqtt_service.start()
+                
+                # SD 업로드 모듈에 MQTT 서비스 설정
+                try:
+                    from core.sd_upload_method import set_mqtt_service
+                    set_mqtt_service(self.mqtt_service)
+                except Exception as e:
+                    self.logger.warning(f"SD 업로드 모듈 MQTT 설정 실패: {e}")
+                
                 self.logger.info("MQTT 서비스 시작 완료")
             except Exception as e:
                 self.logger.warning(f"MQTT 서비스 시작 실패(계속 진행): {e}")
