@@ -280,7 +280,7 @@ class PrinterCommunicator:
 
                             try:
                                 self.response_queue.put_nowait(RxLine(line=line, ts=time.time()))
-                            except queue.Full:
+                            except Queue.Full:
                                 # 가득 차면 가장 오래된 항목 하나 버리고 다시 시도 (간단한 ring-buffer 동작)
                                 try:
                                     _ = self.response_queue.get_nowait()
