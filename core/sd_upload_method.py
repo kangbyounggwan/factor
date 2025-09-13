@@ -27,30 +27,61 @@ except ImportError:
 
 # ========== 유틸리티 함수들 ==========
 
-def drain_response_queue(pc) -> None:
-    """핸드셰이크 전에 잔여 라인 비우기(선택)."""
-    try:
-        while True:
-            pc.response_queue.get_nowait()
-    except Empty:
-        pass
-
-
-def readline_from_worker(pc, timeout: float = 2.0) -> str:
+def drain_response_queue(pc, log: bool = False, tag: str = "DRAIN") -> int:
     """
-    워커가 넣어준 응답을 큐에서 한 줄 가져온다.
-    (시리얼 직접 읽기 금지, 단일 리더 패턴 유지)
+    업로드/핸드셰이크 전에 남아있는 큐를 비우며(선택), 드롭된 라인도 로깅.
+    Returns: 드레인한 개수
     """
-    end = time.time() + timeout
-    while time.time() < end:
+    n = 0
+    while True:
         try:
-            rx = pc.response_queue.get(timeout=max(0.05, end - time.time()))
-            if hasattr(rx, "line"):
-                return str(rx.line).strip()
-            return str(rx).strip()
+            item = pc.response_queue.get_nowait()
+            n += 1
+            if log and getattr(pc, "logger", None):
+                s = getattr(item, "line", None)
+                if s is None:
+                    s = str(item)
+                pc.logger.debug(f"[RXQ][{tag}] drop #{n}: {s}")
         except Empty:
-            pass
-    return ""
+            break
+    if log and getattr(pc, "logger", None):
+        pc.logger.debug(f"[RXQ][{tag}] drained={n} remain={_qsize_safe(pc.response_queue)}")
+    return n
+
+
+def readline_from_worker(pc, timeout: float = 2.0, tag: str = "GEN") -> str:
+    """
+    워커가 넣어준 response_queue에서 '한 줄' 꺼내고 로그에 남김.
+    타임아웃이면 빈 문자열을 반환하고 그 사실도 로그.
+    """
+    logger = getattr(pc, "logger", None)
+    t0 = time.time()
+    try:
+        item = pc.response_queue.get(timeout=timeout)
+    except Empty:
+        if logger:
+            logger.info(f"[RXQ][{tag}] timeout after {timeout:.2f}s (qsize={_qsize_safe(pc.response_queue)})")
+        return ""
+
+    # 라인/타임스탬프 정리
+    line = getattr(item, "line", None)
+    ts = getattr(item, "ts", None)
+    if line is None:
+        line = str(item)
+    line = (line or "").strip()
+
+    # 보기 좋은 시간 문자열 구성
+    if ts:
+        ts_str = time.strftime("%H:%M:%S", time.localtime(float(ts)))
+    else:
+        ts_str = f"+{(time.time() - t0):.3f}s"
+
+    # 로깅 (INFO에 한 줄, DEBUG에 부가 정보)
+    if logger:
+        logger.info(f"[RXQ][{tag}] {ts_str} <- {line}")
+        logger.debug(f"[RXQ][{tag}] qsize={_qsize_safe(pc.response_queue)} last_rx_time={getattr(pc, 'last_response_time', None)}")
+
+    return line
 
 
 def _send_text_with_retry_using_worker(pc, payload: str, timeout: float = 3.0) -> bool:
