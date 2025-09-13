@@ -326,8 +326,8 @@ class UploadGuard:
         """
         try:
             # 온도 자동리포트/폴링 중지
-            if hasattr(self.fc, '_rx_guard_running'):
-                self.fc._rx_guard_running = False
+            # if hasattr(self.fc, '_rx_guard_running'):
+            #     self.fc._rx_guard_running = False
 
 
             if self.temp_auto_supported is True:
@@ -426,10 +426,10 @@ class UploadGuard:
             
             setattr(self.pc, 'rx_paused', False)
                     # RX 가디언 재활성화
-            if hasattr(self.fc, '_rx_guard_running'):
-                self.fc._rx_guard_running = True
-                self.fc._start_rx_guardian()
-                
+            # if hasattr(self.fc, '_rx_guard_running'):
+            #     self.fc._rx_guard_running = True
+            #     self.fc._start_rx_guardian()
+
             if current_app and hasattr(current_app, 'logger'):
                 current_app.logger.info("업로드 보호: 자동리포트/폴링 재개")
         except Exception:
