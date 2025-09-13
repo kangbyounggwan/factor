@@ -282,8 +282,9 @@ class FactorClient:
         
         self.logger.info("워커 스레드 시작 완료")
 
+
+
     def _start_rx_guardian(self):
-        """RX 가디언: 읽기 워커가 멈추지 않도록 강제 유지"""
         if self._rx_guard_running:
             return
         self._rx_guard_running = True
@@ -292,25 +293,13 @@ class FactorClient:
                 try:
                     pc = getattr(self, 'printer_comm', None)
                     if not pc:
-                        time.sleep(0.1)
-                        continue
-                    # 절대 멈춤 방지: rx_paused/sync_mode 해제
-                    try:
-                        setattr(pc, 'rx_paused', False)
-                        pc.sync_mode = False
-                    except Exception:
-                        pass
-                    # read_thread 재기동
-                    try:
-                        if pc.connected and pc.serial_conn and pc.serial_conn.is_open:
-                            if not (pc.read_thread and pc.read_thread.is_alive()):
-                                pc.read_thread = threading.Thread(target=pc._read_worker, daemon=True)
-                                pc.read_thread.start()
-                    except Exception:
-                        pass
+                        time.sleep(0.1); continue
+                    # ❌ rx_paused/sync_mode 강제 해제 제거
+                    # ✅ 워커만 살아있게 보장
+                    pc._ensure_read_thread()
                 except Exception:
                     pass
-                time.sleep(0.05)
+                time.sleep(0.25)  # CPU 절약
         self._rx_guard_thread = threading.Thread(target=_guard, daemon=True)
         self._rx_guard_thread.start()
 
