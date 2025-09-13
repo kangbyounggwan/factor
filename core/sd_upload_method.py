@@ -78,6 +78,19 @@ def _nline(n: int, payload: str) -> bytes:
     line = f"N{n} {payload}"
     return f"{line}*{_xor(line)}\n".encode("ascii", "ignore")
 
+def _wait_ok_or_keywords(ser, timeout=5.0):
+    # ok / Writing to file / Done saving file(펌웨어별 메시지) 등 기다리기
+    end = time.time() + timeout
+    while time.time() < end:
+        line = _readline(ser, timeout=0.5)
+        low = line.lower()
+        if not line:
+            continue
+        if low.startswith("ok") or "writing" in low or "open" in low or "done saving file" in low:
+            return True
+        # 기타 echo:, busy: 등은 무시
+    return False
+
 
 def _readline(ser, timeout: float = 2.0) -> str:
     """
@@ -296,12 +309,16 @@ def sd_upload(pc, remote_name: str, up_stream, total_bytes: Optional[int] = None
                     last_log = time.time()
 
         # 파일 닫기 및 완료 확인
-        n = _send_with_retry(ser, n, "M29", timeout=10.0)      # ← 번호+체크섬으로 종료
+        # n = _send_with_retry(ser, n, "M29", timeout=10.0)      # ← 번호+체크섬으로 종료
         try:
             n = _send_with_retry(ser, n, "M110 N0", timeout=2.0)  # ← 번호+체크섬으로 라인넘버 리셋
         except Exception:
             pass
 
+        ser.write(("M29\n").encode("ascii", "ignore"))
+        ser.flush()
+
+        _wait_ok_or_keywords(ser, timeout=10.0)
         # 최종 100% 진행률 발행
         try:
             if _mqtt_service_instance:
