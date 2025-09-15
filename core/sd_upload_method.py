@@ -296,7 +296,7 @@ def sd_upload(pc, remote_name: str, up_stream, total_bytes: Optional[int] = None
                 except Exception:
                     pass
 
-            CHUNK = 64 * 1024
+            CHUNK = 2 * 1024
             while True:
                 chunk = up_stream.read(CHUNK)
                 if not chunk:
