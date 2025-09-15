@@ -266,7 +266,7 @@ def sd_upload(pc, remote_name: str, up_stream, total_bytes: Optional[int] = None
             total_lines = len(processed)
 
             # 청크 전송
-            CHUNK = 64 * 1024
+            CHUNK = 1024
             for i in range(0, len(content), CHUNK):
                 chunk = content[i:i+CHUNK]
                 ser.write(chunk)
@@ -296,7 +296,7 @@ def sd_upload(pc, remote_name: str, up_stream, total_bytes: Optional[int] = None
                 except Exception:
                     pass
 
-            CHUNK = 2 * 1024
+            CHUNK = 1024
             while True:
                 chunk = up_stream.read(CHUNK)
                 if not chunk:
