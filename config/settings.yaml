@@ -20,8 +20,10 @@ system:
   timezone: UTC
   power_management:
     enable_watchdog: true
-    auto_reboot_on_error: true
+    auto_reboot_on_error: false  # 오류 대기 모드 사용으로 변경
     max_error_count: 5
+    error_wait_timeout: 300  # 오류 대기 모드 시간 (초, 기본 5분)
+    error_wait_enabled: true  # 오류 대기 모드 활성화
   network:
     wifi_country: US
     enable_ssh: true

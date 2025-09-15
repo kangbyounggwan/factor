@@ -360,6 +360,55 @@ def update_config():
         return jsonify({'error': str(e)}), 500
 
 
+@api_bp.route('/system/error-status')
+def get_error_status():
+    """오류 상태 및 대기 모드 정보 반환"""
+    try:
+        factor_client = current_app.factor_client
+        if not factor_client:
+            return jsonify({'error': 'Factor client not available'}), 503
+        
+        max_errors = factor_client.config.get('system.power_management.max_error_count', 5)
+        wait_timeout = factor_client.config.get('system.power_management.error_wait_timeout', 300)
+        
+        error_status = {
+            'error_count': factor_client.error_count,
+            'max_errors': max_errors,
+            'error_wait_mode': getattr(factor_client, 'error_wait_mode', False),
+            'wait_timeout': wait_timeout,
+            'remaining_wait_time': 0
+        }
+        
+        if factor_client.error_wait_mode and hasattr(factor_client, 'error_wait_start_time'):
+            if factor_client.error_wait_start_time:
+                elapsed_time = time.time() - factor_client.error_wait_start_time
+                error_status['remaining_wait_time'] = max(0, wait_timeout - elapsed_time)
+        
+        return jsonify(error_status)
+        
+    except Exception as e:
+        logger.error(f"오류 상태 조회 실패: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@api_bp.route('/system/reset-error-count', methods=['POST'])
+def reset_error_count():
+    """오류 카운터 수동 리셋"""
+    try:
+        factor_client = current_app.factor_client
+        if not factor_client:
+            return jsonify({'error': 'Factor client not available'}), 503
+        
+        factor_client.error_count = 0
+        factor_client.error_wait_mode = False
+        factor_client.error_wait_start_time = None
+        
+        logger.info("웹 API를 통한 오류 카운터 수동 리셋")
+        return jsonify({'success': True, 'message': '오류 카운터가 리셋되었습니다.'})
+        
+    except Exception as e:
+        logger.error(f"오류 카운터 리셋 실패: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @api_bp.route('/health')
 def health_check():
     """헬스 체크"""

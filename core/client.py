@@ -72,6 +72,8 @@ class FactorClient:
         self.error_count = 0
         self.last_heartbeat = time.time()
         self.connected = False
+        self.error_wait_mode = False  # 오류 대기 모드
+        self.error_wait_start_time = None  # 대기 모드 시작 시간
         
         # 각 명령별 마지막 응답 시간 추적
         self.last_temperature_response = time.time()  # M105 응답
@@ -574,13 +576,24 @@ class FactorClient:
         self.logger.error(f"================================")
         
         if self.error_count >= max_errors:
-            # 재부팅 로직 일시 비활성화
-            # if self.config.get('system.power_management.auto_reboot_on_error', False):
-            #     self.logger.critical("최대 오류 횟수 초과 - 시스템 재부팅")
-            #     os.system('sudo reboot')
-            # else:
-            self.logger.critical("최대 오류 횟수 초과 - 프로그램 종료")
-            self.stop()
+            error_wait_enabled = self.config.get('system.power_management.error_wait_enabled', True)
+            
+            if error_wait_enabled:
+                if not self.error_wait_mode:
+                    # 오류 대기 모드 진입
+                    self.error_wait_mode = True
+                    self.error_wait_start_time = time.time()
+                    wait_timeout = self.config.get('system.power_management.error_wait_timeout', 300)
+                    self.logger.critical(f"최대 오류 횟수 초과 ({max_errors}회) - 오류 대기 모드 진입")
+                    self.logger.info(f"오류 대기 모드: {wait_timeout}초간 대기 후 자동 복구 시도")
+                else:
+                    # 이미 대기 모드인 경우 추가 로깅
+                    wait_duration = time.time() - self.error_wait_start_time
+                    self.logger.warning(f"오류 대기 모드 진행 중 (경과 시간: {wait_duration:.1f}초)")
+            else:
+                # 오류 대기 모드 비활성화 - 기존 동작 (프로그램 종료)
+                self.logger.critical("최대 오류 횟수 초과 - 프로그램 종료")
+                self.stop()
     
     # _attempt_heartbeat_recovery 제거됨 (하트비트 복구 미사용)
     
@@ -644,7 +657,9 @@ class FactorClient:
 
                 self.connected = True
                 self.error_count = 0
-                self.logger.info("프린터 재연결 완료 및 에러 카운트 리셋")
+                self.error_wait_mode = False
+                self.error_wait_start_time = None
+                self.logger.info("프린터 재연결 완료 및 에러 카운트 리셋, 오류 대기 모드 해제")
             else:
                 self.connected = False
                 self.logger.error("프린터 재연결 실패 → 5회 재시도 후 재부팅 예정")
@@ -704,7 +719,9 @@ class FactorClient:
                             except Exception:
                                 pass
                             self.error_count = 0
-                            self.logger.info("프린터 재연결 완료 및 에러 카운트 리셋")
+                            self.error_wait_mode = False
+                            self.error_wait_start_time = None
+                            self.logger.info("프린터 재연결 완료 및 에러 카운트 리셋, 오류 대기 모드 해제")
                             return
 
                     # 여기까지 오면 실패 → 재부팅 로직 주석 처리
@@ -755,11 +772,49 @@ class FactorClient:
                 if cpu_temp > temp_threshold:
                     self.logger.warning(f"CPU 온도 높음: {cpu_temp}°C (임계값: {temp_threshold}°C)")
                 
+                # 오류 대기 모드 처리
+                self._handle_error_wait_mode()
+                
                 time.sleep(30)  # 30초마다 모니터링
                 
             except Exception as e:
                 self.logger.error(f"시스템 모니터링 오류: {e}")
                 time.sleep(30)
+    
+    def _handle_error_wait_mode(self):
+        """오류 대기 모드 처리"""
+        if not self.error_wait_mode:
+            return
+        
+        wait_duration = time.time() - self.error_wait_start_time
+        wait_timeout = self.config.get('system.power_management.error_wait_timeout', 300)  # 기본 5분
+        
+        if wait_duration >= wait_timeout:
+            # 대기 시간 완료 - 복구 시도
+            self.logger.info("오류 대기 모드 시간 완료 - 복구 시도 시작")
+            
+            # 프린터 상태 확인
+            if self.printer_comm and self.printer_comm.connected:
+                # 프린터가 연결되어 있으면 상태 확인
+                if self.printer_comm.state != PrinterState.ERROR:
+                    # 정상 상태로 복구됨
+                    self.error_count = 0
+                    self.error_wait_mode = False
+                    self.error_wait_start_time = None
+                    self.logger.info("프린터 정상 상태 복구 - 오류 대기 모드 해제")
+                else:
+                    # 여전히 오류 상태 - 재연결 시도
+                    self.logger.info("프린터 여전히 오류 상태 - 재연결 시도")
+                    threading.Thread(target=self._reconnect_printer, daemon=True).start()
+            else:
+                # 프린터 연결 끊어짐 - 재연결 시도
+                self.logger.info("프린터 연결 끊어짐 - 재연결 시도")
+                threading.Thread(target=self._reconnect_printer, daemon=True).start()
+        else:
+            # 대기 중 - 남은 시간 로깅 (1분마다)
+            remaining_time = wait_timeout - wait_duration
+            if int(remaining_time) % 60 == 0 and remaining_time > 0:
+                self.logger.info(f"오류 대기 모드 진행 중 - 남은 시간: {remaining_time:.0f}초")
     
     def _process_printer_data(self, data: Dict):
         """프린터 데이터 처리"""
