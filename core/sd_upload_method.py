@@ -79,18 +79,23 @@ def _nline(n: int, payload: str) -> bytes:
     return f"{line}*{_xor(line)}\n".encode("ascii", "ignore")
 
 def _wait_ok_or_keywords(ser, timeout=5.0):
-    # ok / Writing to file / Done saving file(펌웨어별 메시지) 등 기다리기
+    """
+    ok / Writing to file / open / done saving file 같은 키워드가 나오면 True
+    타임아웃이면 False
+    """
     end = time.time() + timeout
     while time.time() < end:
         line = _readline(ser, timeout=0.5)
-        low = line.lower()
         if not line:
             continue
+        low = line.lower()
         if low.startswith("ok") or "writing" in low or "open" in low or "done saving file" in low:
+            # 디버깅에 도움되는 로그
             print(f"wait_ok_or_keywords: {line}")
             return True
-        # 기타 echo:, busy: 등은 무시
+        # echo:, busy: 등은 무시
     return False
+
 
 
 def _readline(ser, timeout: float = 2.0) -> str:
@@ -167,171 +172,166 @@ def _send_with_retry(ser, n: int, payload: str, timeout: float = 3.0) -> int:
 
 # ========== 핵심 업로드 함수 ==========
 
-def sd_upload(pc, remote_name: str, up_stream, total_bytes: Optional[int] = None, remove_comments: bool = False, upload_id: Optional[str] = None) -> Dict[str, Any]:
+def sd_upload(pc, remote_name: str, up_stream, total_bytes: Optional[int] = None,
+              remove_comments: bool = False, upload_id: Optional[str] = None) -> Dict[str, Any]:
     """
     SD 카드로 파일 업로드 (M28/M29 프로토콜) - 고속 버전
-    
-    Marlin 펌웨어의 M28/M29 프로토콜을 사용하여 파일을 SD 카드에 업로드합니다.
-    M28~M29 사이의 본문은 raw 바이트 스트리밍으로 전송하여 고속 업로드를 구현합니다.
-    라인 번호링과 체크섬은 핸드셰이크에만 사용하고, 본문은 직접 스트리밍합니다.
-    
-    Args:
-        pc: 프린터 통신 객체 (serial_conn, serial_lock 속성 필요)
-        remote_name (str): SD 카드에 저장될 파일명
-        up_stream: 업로드할 파일의 스트림 객체
-        total_bytes (Optional[int]): 파일의 총 크기 (진행률 표시용)
-        remove_comments (bool): 주석 제거 여부 (기본값: False)
-        upload_id (Optional[str]): 업로드 세션 ID (MQTT 진행률 발행용)
-        
-    Returns:
-        Dict[str, Any]: 업로드 결과 정보
-            - lines (int): 전송된 라인 수
-            - bytes (int): 전송된 바이트 수
-            - closed (bool): 업로드 완료 여부
-            
-    Raises:
-        Exception: 시리얼 통신 오류, 파일 처리 오류 등
-        
-    Note:
-        이 함수는 시리얼 락을 사용하여 동시 접근을 방지합니다.
-        업로드 중에는 다른 시리얼 통신이 차단됩니다.
+
+    흐름:
+      1) N코드로 M110 N0 → 라인 넘버 리셋
+      2) N코드로 M28 <name> → 파일 오픈
+      3) (중요) M28~M29 사이 본문은 raw 바이트 스트리밍
+      4) 평문 M29 → 파일 닫기
+      5) 완료 응답 대기 → MQTT 최종 100%
     """
     ser = pc.serial_conn
     total_lines = 0
     sent_bytes = 0
 
-    # 텍스트 스트림으로 변환 (유효하지 않은 바이트는 무시)
-    text_stream = io.TextIOWrapper(up_stream, encoding="utf-8", errors="ignore")
+    # 업스트림 위치/크기 파악 (필요 시 임시파일 사용)
+    # 이미 호출측에서 prepare_upload_stream()을 쓰는 경우 그대로 넘어온다고 가정
+    # 여기서는 up_stream이 바이너리 모드라고 가정하고, 모르면 바이너리로 감쌉니다.
+    if hasattr(up_stream, "read") and not isinstance(up_stream, (io.BufferedReader, io.BytesIO)):
+        # 텍스트 스트림으로 넘어왔으면 바이너리 래핑
+        try:
+            up_stream = up_stream.buffer  # 텍스트 IO의 buffer
+        except Exception:
+            # 마지막 보루: 전체를 바이트로 읽어 BytesIO에 담음
+            data = up_stream.read()
+            if isinstance(data, str):
+                data = data.encode("utf-8", "ignore")
+            up_stream = io.BytesIO(data)
+            total_bytes = len(data)
 
     with pc.serial_lock:
-        # 입력 버퍼 정리 (이전 응답 잔여물 제거)
+        # 잔여 응답 정리
         try:
             ser.reset_input_buffer()
         except Exception:
             pass
 
+        # 라인 번호 동기화 + 파일 열기 (N코드 + 체크섬)
         n = 0
-        # 라인 번호 동기화 후 파일 열기
         try:
-            n = _send_with_retry(ser, n, "M110 N0", timeout=2.0)
+            n = _send_with_retry(ser, n, "M110 N0", timeout=2.0)  # => N0 M110 N0*cs
         except Exception:
+            # 일부 FW는 이미 동기화된 상태일 수 있으므로 무시 가능
             pass
-        n = _send_with_retry(ser, n, f"M28 {remote_name}", timeout=5.0)
 
-        # MQTT 진행률 발행 함수 정의
-        def _pub_progress():
-            """MQTT로 업로드 진행률 발행"""
+        n = _send_with_retry(ser, n, f"M28 {remote_name}", timeout=7.0)  # => N1 M28 name*cs
+        # 'Now fresh file' / 'Writing to file' 응답이 오도록 잠시 대기
+        _wait_ok_or_keywords(ser, timeout=3.0)
+
+        # MQTT 진행률 발행 함수
+        def _pub_progress(final: bool = False):
             try:
                 if not _mqtt_service_instance:
                     return
-                    
-                # 진행률 메시지 구성
-                msg = {
-                    "upload_id": upload_id,
-                    "stage": "to_printer",  # MQTT 청크 수신 단계와 구분
-                    "name": remote_name,
-                    "sent_bytes": sent_bytes,
-                    "total_bytes": total_bytes,
-                    "percent": round((sent_bytes/total_bytes)*100.0, 1) if total_bytes else None,
-                }
-                
-                # MQTT로 진행률 발행
-                _mqtt_service_instance._publish_ctrl_result("sd_upload_progress", True, json.dumps(msg, ensure_ascii=False))
-            except Exception:
-                pass
-
-        # 파일 내용 raw 바이트 스트리밍 (고속 전송)
-        LOG_BYTES = 512 * 1024  # 512KB마다 진행률 로그
-        acc = 0
-        last_log = time.time()
-        
-        # 주석 제거가 필요한 경우 텍스트 모드로 처리
-        if remove_comments:
-            processed_content = []
-            for raw in text_stream:
-                payload = raw.rstrip("\r\n")
-                if payload:
-                    comment_pos = payload.find(';')
-                    if comment_pos >= 0:
-                        payload = payload[:comment_pos].rstrip()
-                if payload:  # 빈 라인 제외
-                    processed_content.append(payload)
-            
-            # 처리된 내용을 바이트로 변환하여 스트리밍
-            content_bytes = '\n'.join(processed_content).encode('utf-8', 'ignore')
-            total_lines = len(processed_content)
-            
-            # 청크 단위로 raw 바이트 전송
-            chunk_size = 1024  # 1KB 청크
-            for i in range(0, len(content_bytes), chunk_size):
-                chunk = content_bytes[i:i + chunk_size]
-                ser.write(chunk)
-                ser.flush()
-                
-                sent_bytes += len(chunk)
-                acc += len(chunk)
-                
-                # 진행률 로깅 및 MQTT 발행
-                if (acc >= LOG_BYTES) or (time.time() - last_log >= 1.0):
-                    if total_bytes:
-                        pct = (sent_bytes / total_bytes) * 100.0
-                        print(f"SD 업로드 진행: {sent_bytes}/{total_bytes} bytes ({pct:.1f}%)")
-                    else:
-                        print(f"SD 업로드 진행: {sent_bytes} bytes")
-                    
-                    # MQTT로 진행률 발행
-                    _pub_progress()
-                    
-                    acc = 0
-                    last_log = time.time()
-        else:
-            # 주석 제거 없이 raw 바이트 스트리밍
-            for raw in text_stream:
-                line_bytes = raw.encode('utf-8', 'ignore')
-                ser.write(line_bytes)
-                ser.flush()
-                
-                sent_bytes += len(line_bytes)
-                total_lines += 1
-                acc += len(line_bytes)
-                
-                # 진행률 로깅 및 MQTT 발행
-                if (acc >= LOG_BYTES) or (time.time() - last_log >= 1.0):
-                    if total_bytes:
-                        pct = (sent_bytes / total_bytes) * 100.0
-                        print(f"SD 업로드 진행: {sent_bytes}/{total_bytes} bytes ({pct:.1f}%)")
-                    else:
-                        print(f"SD 업로드 진행: {sent_bytes} bytes")
-                    
-                    # MQTT로 진행률 발행
-                    _pub_progress()
-                    
-                    acc = 0
-                    last_log = time.time()
-
-        print(f"M29")
-        ser.write(("M29\n").encode("ascii", "ignore"))
-        ser.flush()
-
-        _wait_ok_or_keywords(ser, timeout=10.0)
-        # 최종 100% 진행률 발행
-        try:
-            if _mqtt_service_instance:
                 msg = {
                     "upload_id": upload_id,
                     "stage": "to_printer",
                     "name": remote_name,
                     "sent_bytes": sent_bytes,
                     "total_bytes": total_bytes,
-                    "percent": 100.0 if total_bytes else None,
-                    "done": True,
+                    "percent": round((sent_bytes / total_bytes) * 100.0, 1) if total_bytes else None,
                 }
+                if final:
+                    msg["done"] = True
                 _mqtt_service_instance._publish_ctrl_result(
-                    "sd_upload_progress", True, json.dumps(msg, ensure_ascii=False))
-        except Exception:
-            pass
+                    "sd_upload_progress", True, json.dumps(msg, ensure_ascii=False)
+                )
+            except Exception:
+                pass
+
+        # === 본문 스트리밍 ===
+        LOG_BYTES = 512 * 1024  # 512KB마다 로그
+        acc = 0
+        last_log = time.time()
+
+        if remove_comments:
+            # 텍스트로 한 줄씩 읽어 주석 제거 → 바이트로 변환 후 청크 전송
+            text = io.TextIOWrapper(up_stream, encoding="utf-8", errors="ignore", newline=None)
+            processed = []
+            for raw in text:
+                line = raw.rstrip("\r\n")
+                if not line:
+                    continue
+                # 세미콜론 주석 제거
+                cpos = line.find(";")
+                if cpos >= 0:
+                    line = line[:cpos].rstrip()
+                if line:
+                    processed.append(line)
+            content = ("\n".join(processed) + "\n").encode("utf-8", "ignore")
+            total_lines = len(processed)
+
+            # 청크 전송
+            CHUNK = 64 * 1024
+            for i in range(0, len(content), CHUNK):
+                chunk = content[i:i+CHUNK]
+                ser.write(chunk)
+                ser.flush()
+
+                sent_bytes += len(chunk)
+                acc += len(chunk)
+
+                # 진행률 출력 & MQTT
+                if (acc >= LOG_BYTES) or (time.time() - last_log >= 1.0):
+                    if total_bytes:
+                        print(f"SD 업로드 진행: {sent_bytes}/{total_bytes} bytes ({(sent_bytes/total_bytes)*100:.1f}%)")
+                    else:
+                        print(f"SD 업로드 진행: {sent_bytes} bytes")
+                    _pub_progress()
+                    acc = 0
+                    last_log = time.time()
+        else:
+            # **원본 그대로 raw 바이트 스트리밍** (가장 호환성 높음)
+            # 가능하면 총 크기 추정
+            if total_bytes is None:
+                try:
+                    cur = up_stream.tell()
+                    up_stream.seek(0, os.SEEK_END)
+                    total_bytes = up_stream.tell()
+                    up_stream.seek(cur, os.SEEK_SET)
+                except Exception:
+                    pass
+
+            CHUNK = 64 * 1024
+            while True:
+                chunk = up_stream.read(CHUNK)
+                if not chunk:
+                    break
+                # EOL 정규화가 필요하면 여기서 처리 가능 (보통 그대로가 안전)
+                # chunk = chunk.replace(b"\r\n", b"\n")  # 필요시
+
+                ser.write(chunk)
+                ser.flush()
+
+                sent_bytes += len(chunk)
+                acc += len(chunk)
+                total_lines += 1  # 대략적인 라인 카운트(엄밀하진 않음)
+
+                if (acc >= LOG_BYTES) or (time.time() - last_log >= 1.0):
+                    if total_bytes:
+                        print(f"SD 업로드 진행: {sent_bytes}/{total_bytes} bytes ({(sent_bytes/total_bytes)*100:.1f}%)")
+                    else:
+                        print(f"SD 업로드 진행: {sent_bytes} bytes")
+                    _pub_progress()
+                    acc = 0
+                    last_log = time.time()
+
+        # 파일 닫기: 평문 M29 (대부분 FW에서 안전)
+        ser.write(b"M29\n")
+        ser.flush()
+
+        # 완료 키워드/ok 대기
+        _wait_ok_or_keywords(ser, timeout=10.0)
+
+        # 최종 100% 발행
+        _pub_progress(final=True)
 
     return {"lines": total_lines, "bytes": sent_bytes, "closed": True}
+
 
 
 # ========== 업로드 보호 메커니즘 ==========
