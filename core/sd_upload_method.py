@@ -33,102 +33,30 @@ def set_mqtt_service(mqtt_service):
 
 
 # ========== 유틸리티 함수들 ==========
-
 def _xor(s: str) -> int:
-    """
-    문자열의 XOR 체크섬 계산
-    
-    Marlin 펌웨어에서 사용하는 체크섬 알고리즘으로,
-    각 문자의 ASCII 값을 XOR 연산하여 단일 바이트 체크섬을 생성합니다.
-    
-    Args:
-        s (str): 체크섬을 계산할 문자열
-        
-    Returns:
-        int: 계산된 체크섬 값 (0-255)
-        
-    Example:
-        >>> _xor("G28")
-        123
-    """
+    """Marlin XOR 체크섬 (문자열 전체의 ASCII XOR)"""
     v = 0
     for ch in s:
         v ^= ord(ch)
-    return v
+    return v & 0xFF
 
 
 def _nline(n: int, payload: str) -> bytes:
     """
-    라인 번호와 체크섬이 포함된 G-code 명령 생성
-    
-    Marlin의 라인 번호링 시스템에 따라 "N{번호} {명령}*{체크섬}" 형식으로
-    명령을 생성합니다. 이를 통해 프린터가 명령의 순서와 무결성을 확인할 수 있습니다.
-    
-    Args:
-        n (int): 라인 번호 (0부터 시작)
-        payload (str): 실제 G-code 명령
-        
-    Returns:
-        bytes: 인코딩된 명령 (ASCII)
-        
-    Example:
-        >>> _nline(1, "G28")
-        b'N1 G28*123\\n'
+    'N{n} {payload}*{cs}\\r\\n' 프레임 생성
+    * 체크섬은 'N{n} {payload}' 문자열 전체에 대해 XOR
     """
-    line = f"N{n} {payload}"
-    return f"{line}*{_xor(line)}\r\n".encode("ascii", "ignore")
+    body = f"N{n} {payload}"
+    cs = _xor(body)
+    return f"{body}*{cs}\r\n".encode("ascii", "ignore")
 
-def _wait_ok_or_keywords(ser, timeout=5.0):
-    """
-    ok / Writing to file / open / done saving file 같은 키워드가 나오면 True
-    타임아웃이면 False
-    """
-    end = time.time() + timeout
-    while time.time() < end:
-        line = _readline(ser, timeout=0.5)
-        if not line:
-            continue
-        low = line.lower()
-        if low.startswith("ok") or "writing" in low or "open" in low or "done saving file" in low:
-            # 디버깅에 도움되는 로그
-            print(f"wait_ok_or_keywords: {line}")
-            return True
-        # echo:, busy: 등은 무시
-    return False
-
-
-
-def _readline(ser, timeout: float = 2.0) -> str:
-    """
-    타임아웃이 있는 시리얼 라인 읽기
-    
-    지정된 시간 동안 시리얼 포트에서 한 줄을 읽어옵니다.
-    타임아웃이 발생하면 빈 문자열을 반환합니다.
-    
-    Args:
-        ser: 시리얼 연결 객체
-        timeout (float): 타임아웃 시간 (초)
-        
-    Returns:
-        str: 읽어온 라인 (공백 제거됨) 또는 빈 문자열
-        
-    Note:
-        UTF-8 디코딩 시 오류가 발생하면 무시하고 계속 진행합니다.
-    """
-    end = time.time() + timeout
-    while time.time() < end:
-        raw = ser.readline()
-        if raw:
-            return raw.decode("utf-8", "ignore").strip()
-        time.sleep(0.005)
-    return ""
 
 def _read_until_ok_or_resend(ser, timeout: float = 2.0):
     """
-    FW 응답을 읽어 ok / Resend:n / Error / timeout 판정.
+    FW 응답을 읽어 ok / Resend:n / Error / timeout 판정
     return: ("ok", None) | ("resend", n) | ("error", msg) | ("timeout", None)
     """
-    import re, time
+    import re
     deadline = time.time() + timeout
     buf = b""
     while time.time() < deadline:
@@ -157,147 +85,140 @@ def _read_until_ok_or_resend(ser, timeout: float = 2.0):
     return ("timeout", None)
 
 
+def _wait_ok_or_keywords(ser, timeout=5.0) -> bool:
+    """
+    ok / 'writing' / 'open' / 'done saving file' 키워드가 나오면 True
+    타임아웃이면 False
+    """
+    deadline = time.time() + timeout
+    buf = b""
+    while time.time() < deadline:
+        data = ser.read(ser.in_waiting or 1)
+        if data:
+            buf += data
+            lines = buf.split(b"\n")
+            buf = lines[-1]
+            for raw in lines[:-1]:
+                line = raw.decode("utf-8", "ignore").strip()
+                low = line.lower()
+                if not low:
+                    continue
+                if low.startswith("ok") or ("writing" in low) or ("open" in low) or ("done saving file" in low):
+                    # 디버깅 로그
+                    print(f"[PRINTER] {line}")
+                    return True
+        else:
+            time.sleep(0.01)
+    return False
+
 
 def _send_numbered_line(ser, n: int, payload: str, timeout: float = 2.0) -> int:
     """
     번호/체크섬 프레임 전송 + ok/Resend 처리. 성공 시 다음 N 반환.
     """
     while True:
-        ser.write(_nline(n, payload))   # _nline은 이미 정의되어 있음 (개행은 \r\n 권장)
+        ser.write(_nline(n, payload))
         ser.flush()
         status, val = _read_until_ok_or_resend(ser, timeout=timeout)
         if status == "ok":
             return n + 1
         elif status == "resend":
-            n = val           # 요구된 줄번호로 재전송
+            # FW가 요구한 줄번호로 재전송
+            n = val
             continue
         elif status == "timeout":
-            # 같은 N 재시도
+            # 같은 N 재시도 (현장 FW가 ok를 늦게 주는 경우 방지)
             continue
         else:
             raise RuntimeError(f"Printer error on N{n}: {val}")
 
 
-def _send_with_retry(ser, n: int, payload: str, timeout: float = 3.0) -> int:
-    """
-    순차적 명령 전송 및 재전송 처리
-    
-    라인 번호가 포함된 명령을 전송하고, 프린터의 응답을 확인합니다.
-    "ok" 또는 "done saving file" 응답을 받으면 다음 라인 번호를 반환하고,
-    "resend" 또는 "rs" 응답을 받으면 같은 라인을 재전송합니다.
-    
-    Args:
-        ser: 시리얼 연결 객체
-        n (int): 현재 라인 번호
-        payload (str): 전송할 G-code 명령
-        timeout (float): 응답 대기 타임아웃 (초)
-        
-    Returns:
-        int: 다음 라인 번호 (성공 시 n+1)
-        
-    Note:
-        순차적 모드에서는 한 번에 하나의 명령만 전송하여
-        프린터의 처리 능력에 맞춰 안정성을 확보합니다.
-    """
-    while True:
-        # 명령 전송
-        ser.write(_nline(n, payload))
-        ser.flush()
-        
-        # 응답 대기
-        end = time.time() + timeout
-        while time.time() < end:
-            resp = _readline(ser, timeout=0.5).lower()
-            if not resp:
-                continue
-                
-            # 성공 응답 확인
-            if resp.startswith("ok") or ("done saving file" in resp):
-                return n + 1
-                
-            # 재전송 요청 확인
-            if resp.startswith("resend") or resp.startswith("rs"):
-                # 현재 라인을 재전송하기 위해 루프 계속
-                break
-                
-            # 기타 응답 (echo:, t:, busy:, wait 등)은 무시하고 계속 대기
-        # 재전송을 위해 루프 계속
-
-
-# ========== 핵심 업로드 함수 ==========
+# ---------- 핵심 업로드 ----------
 
 def sd_upload(pc, remote_name: str, up_stream, total_bytes: Optional[int] = None,
               remove_comments: bool = False, upload_id: Optional[str] = None) -> Dict[str, Any]:
     """
-    SD 카드로 파일 업로드 (M28/M29 프로토콜) - 고속 버전
+    SD 카드 업로드 (M28/M29) — 번호/체크섬 기반 + Resend 대응
 
-    흐름:
-      1) N코드로 M110 N0 → 라인 넘버 리셋
-      2) N코드로 M28 <name> → 파일 오픈
-      3) (중요) M28~M29 사이 본문은 raw 바이트 스트리밍
-      4) 평문 M29 → 파일 닫기
-      5) 완료 응답 대기 → MQTT 최종 100%
+    순서:
+      N0: M110 N0         → 라인 넘버 리셋
+      N1: M28 <name>      → 파일 오픈
+      N2..: payload lines → 본문(줄 단위, N/체크섬)
+      N?: M29             → 파일 닫기
     """
     ser = pc.serial_conn
     total_lines = 0
     sent_bytes = 0
 
-    # 업스트림 위치/크기 파악 (필요 시 임시파일 사용)
-    # 이미 호출측에서 prepare_upload_stream()을 쓰는 경우 그대로 넘어온다고 가정
-    # 여기서는 up_stream이 바이너리 모드라고 가정하고, 모르면 바이너리로 감쌉니다.
+    # 텍스트 래핑 보장 (이후 줄 단위로 읽음)
     if hasattr(up_stream, "read") and not isinstance(up_stream, (io.BufferedReader, io.BytesIO)):
-        # 텍스트 스트림으로 넘어왔으면 바이너리 래핑
         try:
-            up_stream = up_stream.buffer  # 텍스트 IO의 buffer
+            up_stream = up_stream.buffer
         except Exception:
-            # 마지막 보루: 전체를 바이트로 읽어 BytesIO에 담음
             data = up_stream.read()
             if isinstance(data, str):
                 data = data.encode("utf-8", "ignore")
-            up_stream = io.BytesIO(data)
+            import io as _io
+            up_stream = _io.BytesIO(data)
             total_bytes = len(data)
 
+    # 총 크기 추정(선택)
+    if total_bytes is None:
+        try:
+            cur = up_stream.tell()
+            up_stream.seek(0, 2)  # SEEK_END
+            total_bytes = up_stream.tell()
+            up_stream.seek(cur, 0)
+        except Exception:
+            pass
+
+    LOG_BYTES = 512 * 1024
+    acc = 0
+    last_log = time.time()
+
+    # (옵션) MQTT 진행률
+    def _pub_progress(final: bool = False):
+        try:
+            if not upload_id or not _mqtt_service_instance:
+                return
+            msg = {
+                "upload_id": upload_id,
+                "stage": "to_printer",
+                "name": remote_name,
+                "sent_bytes": sent_bytes,
+                "total_bytes": total_bytes,
+                "percent": round((sent_bytes / total_bytes) * 100.0, 1) if total_bytes else None,
+            }
+            if final:
+                msg["done"] = True
+            _mqtt_service_instance._publish_ctrl_result(
+                "sd_upload_progress", True, json.dumps(msg, ensure_ascii=False)
+            )
+        except Exception:
+            pass
+
     with pc.serial_lock:
-        # 잔여 응답 정리
+        # 0) 포트 정리 + 간섭 억제
         try:
             ser.reset_input_buffer()
         except Exception:
             pass
-
-
-        # MQTT 진행률 발행 함수
-        def _pub_progress(final: bool = False):
-            try:
-                if not _mqtt_service_instance:
-                    return
-                msg = {
-                    "upload_id": upload_id,
-                    "stage": "to_printer",
-                    "name": remote_name,
-                    "sent_bytes": sent_bytes,
-                    "total_bytes": total_bytes,
-                    "percent": round((sent_bytes / total_bytes) * 100.0, 1) if total_bytes else None,
-                }
-                if final:
-                    msg["done"] = True
-                _mqtt_service_instance._publish_ctrl_result(
-                    "sd_upload_progress", True, json.dumps(msg, ensure_ascii=False)
-                )
-            except Exception:
-                pass
         try:
-            ser.write(b"M155 S0\r\n"); ser.flush(); _read_until_ok_or_resend(ser, 1.0)
-            ser.write(b"M154 S0\r\n"); ser.flush(); _read_until_ok_or_resend(ser, 1.0)
-            ser.write(b"M413 S0\r\n"); ser.flush(); _read_until_ok_or_resend(ser, 1.0)
+            # 자동 온도/좌표 리포트 및 전원복구 기능 끄기 (가능한 경우)
+            for cmd in (b"M155 S0\r\n", b"M154 S0\r\n", b"M413 S0\r\n"):
+                ser.write(cmd); ser.flush()
+                _read_until_ok_or_resend(ser, 1.0)
         except Exception:
             pass
-
-        # N0, N1
+        print("@@@@@@@@@@@@@@@@@오토리프트 끄기기@@@@@@@@@@@@@@@@@")
+        # 1) 라인번호 리셋 (N0)
         n_cur = _send_numbered_line(ser, 0, "M110 N0", timeout=2.0)
+        print("@@@@@@@@@@@@@@@@@라인번호 리셋@@@@@@@@@@@@@@@@@")
+        # 2) 파일 열기 (N1)
         n_cur = _send_numbered_line(ser, 1, f"M28 {remote_name}", timeout=7.0)
-        _wait_ok_or_keywords(ser, timeout=3.0)
-
-        # 본문 (줄 단위)
+        _wait_ok_or_keywords(ser, timeout=3.0)  # 'Writing to file' 등의 상태 메시지 대기
+        print("@@@@@@@@@@@@@@@@@SD 업로드 준비@@@@@@@@@@@@@@@@@")
+        # 3) 본문 전송 (줄 단위 + N/체크섬)
         text = io.TextIOWrapper(up_stream, encoding="utf-8", errors="ignore", newline=None)
         for raw in text:
             line = raw.rstrip("\r\n")
@@ -310,7 +231,7 @@ def sd_upload(pc, remote_name: str, up_stream, total_bytes: Optional[int] = None
                 if not line:
                     continue
 
-            # 너무 긴 라인 보호 (대개 불필요)
+            # (안전) 비정상적으로 긴 라인은 분절 — 보통 필요 없음
             parts = [line] if len(line) <= 200 else line.split(" ")
 
             for part in parts:
@@ -318,21 +239,31 @@ def sd_upload(pc, remote_name: str, up_stream, total_bytes: Optional[int] = None
                     continue
                 prev = sent_bytes
                 n_cur = _send_numbered_line(ser, n_cur, part, timeout=2.0)
-                sent_bytes += len(part) + 2  # \r\n 가정
+
+                # 진행률(파일에 기록될 payload 기준, \r\n 2바이트 가정)
+                sent_bytes += len(part) + 2
                 total_lines += 1
+                acc += (sent_bytes - prev)
 
-                # 진행률 출력/MQTT (기존 로직 그대로)
-                # ...
+                # 1초마다 또는 512KB마다 진행률 표시
+                if (acc >= LOG_BYTES) or (time.time() - last_log >= 1.0):
+                    if total_bytes:
+                        print(f"SD 업로드 진행: {sent_bytes}/{total_bytes} bytes "
+                              f"({(sent_bytes/total_bytes)*100:.1f}%)")
+                    else:
+                        print(f"SD 업로드 진행: {sent_bytes} bytes")
+                    _pub_progress()
+                    acc = 0
+                    last_log = time.time()
 
-        # 닫기
+        # 4) 파일 닫기 (N/체크섬 M29)
         _ = _send_numbered_line(ser, n_cur, "M29", timeout=5.0)
 
+        # 5) 완료 키워드/ok 대기 + 최종 보고
         _wait_ok_or_keywords(ser, timeout=10.0)
         _pub_progress(final=True)
 
-
     return {"lines": total_lines, "bytes": sent_bytes, "closed": True}
-
 
 
 # ========== 업로드 보호 메커니즘 ==========
