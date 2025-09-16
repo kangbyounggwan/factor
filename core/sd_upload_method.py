@@ -237,6 +237,8 @@ def sd_upload(pc, remote_name: str, up_stream, total_bytes: Optional[int] = None
             for part in parts:
                 if not part:
                     continue
+
+                print(f"[TX] N{n_cur}: {part}")
                 prev = sent_bytes
                 n_cur = _send_numbered_line(ser, n_cur, part, timeout=2.0)
 
