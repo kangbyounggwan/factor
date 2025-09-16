@@ -218,6 +218,9 @@ def sd_upload(pc, remote_name: str, up_stream, total_bytes: Optional[int] = None
         n_cur = _send_numbered_line(ser, 1, f"M28 {remote_name}", timeout=7.0)
         _wait_ok_or_keywords(ser, timeout=3.0)  # 'Writing to file' 등의 상태 메시지 대기
         print("@@@@@@@@@@@@@@@@@SD 업로드 준비@@@@@@@@@@@@@@@@@")
+
+        time.sleep(5)
+        print("@@@@@@@@@@@@@@@@@폴링 상태 없음음@@@@@@@@@@@@@@@@@")
         # 3) 본문 전송 (줄 단위 + N/체크섬)
         text = io.TextIOWrapper(up_stream, encoding="utf-8", errors="ignore", newline=None)
         for raw in text:
