@@ -18,6 +18,8 @@ import re
 import time
 import tempfile
 from typing import Optional, Tuple, Dict, Any
+
+
 try:
     from core.mqtt_service.bridge import MQTTService
     # 전역 MQTT 서비스 인스턴스 참조를 위한 변수
@@ -33,6 +35,29 @@ def set_mqtt_service(mqtt_service):
 
 
 # ========== 유틸리티 함수들 ==========
+_RE_LEADING_N = re.compile(r"^\s*N\d+\s+")
+_RE_TRAILING_CS = re.compile(r"\s*\*[0-9]+\s*$")
+
+def _normalize_gcode_line(line: str, force_strip_comments: bool = True) -> str:
+    """
+    - 기존 N라인/체크섬 제거
+    - 주석(;) 제거 (force_strip_comments=True면 항상 제거)
+    - 앞뒤 공백 제거
+    - 결과가 빈 줄이면 '' 반환
+    """
+    s = line.strip("\r\n")
+    if not s:
+        return ""
+    s = _RE_LEADING_N.sub("", s)
+    s = _RE_TRAILING_CS.sub("", s)
+    if force_strip_comments:
+        c = s.find(";")
+        if c >= 0:
+            s = s[:c].rstrip()
+    return s
+
+
+
 def _xor(s: str) -> int:
     """Marlin XOR 체크섬 (문자열 전체의 ASCII XOR)"""
     v = 0
@@ -219,20 +244,15 @@ def sd_upload(pc, remote_name: str, up_stream, total_bytes: Optional[int] = None
         _wait_ok_or_keywords(ser, timeout=3.0)  # 'Writing to file' 등의 상태 메시지 대기
         print("@@@@@@@@@@@@@@@@@SD 업로드 준비@@@@@@@@@@@@@@@@@")
 
-        time.sleep(5)
+        time.sleep(2)
         print("@@@@@@@@@@@@@@@@@폴링 상태 없음음@@@@@@@@@@@@@@@@@")
         # 3) 본문 전송 (줄 단위 + N/체크섬)
         text = io.TextIOWrapper(up_stream, encoding="utf-8", errors="ignore", newline=None)
         for raw in text:
-            line = raw.rstrip("\r\n")
+            # ※ 번호/체크섬 모드에선 주석 줄을 전송하면 안 됨 → 항상 정규화
+            line = _normalize_gcode_line(raw, force_strip_comments=True)
             if not line:
                 continue
-            if remove_comments:
-                cpos = line.find(";")
-                if cpos >= 0:
-                    line = line[:cpos].rstrip()
-                if not line:
-                    continue
 
             # (안전) 비정상적으로 긴 라인은 분절 — 보통 필요 없음
             parts = [line] if len(line) <= 200 else line.split(" ")
